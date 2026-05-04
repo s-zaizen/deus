@@ -240,7 +240,7 @@
 	}
 </script>
 
-<div class="relative flex flex-col h-screen text-gray-100 overflow-hidden" style="background:#060a12;">
+<div class="relative flex h-screen text-gray-100 overflow-hidden" style="background:#060a12;">
 
 	<!-- Background eye (watching you). Sits at z-0 on the page root; content
 	     panels are rendered above this but many (editor / sidebars) use their
@@ -259,50 +259,52 @@
 		/>
 	</div>
 
-	<!-- Header -->
-	<div class="relative z-10 flex items-center gap-3 h-12 px-4 bg-gray-900/90 border-b border-gray-800 shrink-0 backdrop-blur-sm">
-		<span class="text-base font-bold text-gray-100 tracking-tight">makina</span>
-		<div class="w-px h-5 bg-gray-700 mx-1"></div>
+	<!-- Left rail: brand + vertical tabs -->
+	<aside class="relative z-10 flex w-32 shrink-0 flex-col bg-gray-900/90 border-r border-gray-800 backdrop-blur-sm">
+		<div class="flex items-center h-12 px-4 border-b border-gray-800 shrink-0">
+			<span class="text-base font-bold text-gray-100 tracking-tight">deus</span>
+		</div>
 
-		<!-- Tabs -->
-		<nav class="flex items-center gap-1">
+		<nav class="flex flex-col gap-1 p-2">
 			{#each VISIBLE_TABS as tab}
 				<button
 					onclick={() => (activeTab = tab)}
 					class={[
-						'flex items-center px-3.5 py-1.5 rounded text-sm font-medium capitalize transition-all',
+						'flex items-center justify-between px-3 py-1.5 rounded text-sm font-medium capitalize transition-all',
 						activeTab === tab
 							? 'bg-indigo-600/30 text-indigo-300 border border-indigo-700/60'
 							: 'text-gray-500 hover:text-gray-300 hover:bg-gray-800 border border-transparent'
 					].join(' ')}
 				>
-					{tab}
+					<span>{tab}</span>
 					{#if tab === 'verify' && verifyCases.length > 0}
-						<span class="ml-1.5 text-xs font-bold bg-indigo-600/50 text-indigo-200 rounded-full px-1.5 py-0.5">
+						<span class="text-xs font-bold bg-indigo-600/50 text-indigo-200 rounded-full px-1.5 py-0.5">
 							{verifyCases.length}
 						</span>
 					{/if}
 				</button>
 			{/each}
 		</nav>
+	</aside>
 
-		<!-- Scan controls -->
-		{#if activeTab === 'scan'}
-			<div class="ml-auto">
-				<ScanPanel
-					{language}
-					onlanguagechange={handleLanguageChange}
-					onscan={handleScan}
-					{scanning}
-					hasFindings={findings.length > 0}
-					onsubmittoverify={handleSubmitToVerify}
-				/>
-			</div>
-		{/if}
-	</div>
+	<!-- Main column -->
+	<div class="relative z-10 flex flex-col flex-1 min-w-0 min-h-0">
+
+	<!-- Contextual top bar (Scan controls on the scan tab) -->
+	{#if activeTab === 'scan'}
+		<div class="flex items-center justify-end h-12 px-4 bg-gray-900/90 border-b border-gray-800 shrink-0 backdrop-blur-sm">
+			<ScanPanel
+				{language}
+				onlanguagechange={handleLanguageChange}
+				onscan={handleScan}
+				{scanning}
+				hasFindings={findings.length > 0}
+				onsubmittoverify={handleSubmitToVerify}
+			/>
+		</div>
+	{/if}
 
 	<!-- Content -->
-	<div class="relative z-10 flex flex-col flex-1 min-h-0">
 	{#if activeTab === 'scan'}
 		<div class="flex flex-1 min-h-0">
 			<!-- File tree sidebar — always present; shows an empty-state
@@ -321,7 +323,7 @@
 					/>
 				{:else}
 					<div class="flex h-full flex-col bg-gray-950/70 border-r border-gray-800/60">
-						<div class="flex items-center gap-2 px-3 py-2 border-b shrink-0" style="border-color:#1a2035;">
+						<div class="flex items-center gap-2 h-12 px-3 border-b shrink-0" style="border-color:#1a2035;">
 							<span class="text-xs font-mono text-gray-600 truncate flex-1">
 								(no folder)
 							</span>
