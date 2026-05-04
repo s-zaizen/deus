@@ -33,7 +33,7 @@
 
 <div class="flex flex-col h-full bg-gray-950/70 border-r border-gray-800/60">
 	<!-- Header -->
-	<div class="flex items-center gap-2 px-3 py-2 border-b shrink-0" style="border-color:#1a2035;">
+	<div class="flex items-center gap-2 h-12 px-3 border-b shrink-0" style="border-color:#1a2035;">
 		<span class="text-xs font-mono text-gray-500 truncate flex-1">{root.name}</span>
 		<button
 			onclick={onclear}
