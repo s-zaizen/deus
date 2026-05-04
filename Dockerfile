@@ -57,12 +57,14 @@ FROM node:20-slim AS frontend
 WORKDIR /app
 ENV NODE_ENV=production
 
+# adapter-static emits a plain HTML/JS bundle in `build/`, so we serve it
+# with `serve -s` (SPA fallback to index.html). The runtime image stays
+# tiny — just `serve` and the static assets.
+RUN npm install -g serve@14
 COPY --from=frontend-builder /app/build ./build
-COPY --from=frontend-builder /app/node_modules ./node_modules
-COPY --from=frontend-builder /app/package.json ./
 
 EXPOSE 3000
-CMD ["node", "build"]
+CMD ["serve", "-s", "build", "-l", "3000"]
 
 # ════════════════════════════════════════════════════════════════════════════
 # ml
