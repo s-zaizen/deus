@@ -116,7 +116,7 @@
 
 <div class="flex flex-1 min-h-0">
 	<!-- Left: Case list -->
-	<div class="w-56 md:w-60 lg:w-64 xl:w-72 shrink-0 flex flex-col border-r border-gray-800 bg-gray-950/70">
+	<div class="w-64 md:w-72 lg:w-80 shrink-0 flex flex-col border-r border-gray-800/80 bg-gray-950">
 		<!-- Header + search -->
 		<div class="shrink-0 border-b border-gray-800/60">
 			<div class="flex items-center gap-2 px-4 py-2.5">
@@ -156,12 +156,12 @@
 
 				<!-- Language filters: equal-width grid, 3 per row -->
 				{#if availableLangs.length > 1}
-					<div class="px-3 pb-2.5 grid grid-cols-3 gap-1">
+					<div class="px-3 pb-2.5 flex flex-wrap gap-1">
 						{#each availableLangs as lang}
 							<button
 								onclick={() => { filterLang = filterLang === lang ? null : lang; }}
 								class={[
-									'text-xs px-1 py-1 rounded border font-mono text-center truncate transition-colors',
+									'text-[10px] px-2 py-1 rounded border font-mono text-center transition-colors',
 									filterLang === lang
 										? 'bg-indigo-700 border-indigo-600 text-white'
 										: 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300 cursor-pointer'
