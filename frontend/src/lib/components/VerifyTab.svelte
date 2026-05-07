@@ -105,16 +105,16 @@
 
 {#if cases.length === 0}
 	<div class="flex-1 flex items-center justify-center bg-gray-950/70">
-		<div class="text-center">
-			<div class="w-12 h-12 mx-auto mb-4 rounded-full bg-gray-800/60 border border-gray-700 flex items-center justify-center">
-				<svg class="w-5 h-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
-						d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+		<div class="text-center max-w-sm px-4">
+			<div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-gray-800/40 border border-dashed border-gray-700/60 flex items-center justify-center">
+				<svg class="w-7 h-7 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+					<path stroke-linecap="round" stroke-linejoin="round"
+						d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
 				</svg>
 			</div>
-			<p class="text-lg text-gray-600">No cases pending.</p>
-			<p class="text-base text-gray-700 mt-1">
-				Scan code and click <span class="text-indigo-500 font-medium">Submit →</span> to queue a case.
+			<p class="text-base text-gray-400 font-medium">All caught up!</p>
+			<p class="text-sm text-gray-600 mt-1 leading-relaxed">
+				No cases waiting for review. Go to the Scan tab to analyze code and send findings here.
 			</p>
 		</div>
 	</div>

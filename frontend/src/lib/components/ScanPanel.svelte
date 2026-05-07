@@ -46,10 +46,10 @@
 		onclick={onscan}
 		disabled={scanning}
 		class={[
-			'flex items-center gap-1.5 px-3.5 py-1 rounded text-xs font-semibold transition-colors',
+			'flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all',
 			scanning
-				? 'bg-green-800 text-green-300 cursor-not-allowed'
-				: 'bg-green-600 hover:bg-green-500 text-white cursor-pointer'
+				? 'bg-green-800/80 text-green-300 cursor-not-allowed'
+				: 'bg-green-600 hover:bg-green-500 hover:shadow-[0_0_12px_rgba(22,163,74,0.25)] text-white cursor-pointer'
 		].join(' ')}
 	>
 		{#if scanning}
@@ -59,22 +59,28 @@
 			</svg>
 			Scanning…
 		{:else}
+			<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+				<path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+			</svg>
 			Scan
 		{/if}
 	</button>
 
-	<div class="w-px h-3.5 bg-gray-700"></div>
+	<div class="w-px h-4 bg-gray-700/60"></div>
 
 	<button
 		onclick={onsubmittoverify}
 		disabled={!hasFindings || scanning}
 		class={[
-			'flex items-center gap-1 px-3.5 py-1 rounded text-xs font-semibold border transition-colors',
+			'flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition-all',
 			hasFindings && !scanning
-				? 'border-indigo-600 text-indigo-300 hover:bg-indigo-900/40 cursor-pointer'
+				? 'border-indigo-500/60 text-indigo-300 hover:bg-indigo-900/30 hover:border-indigo-500 hover:shadow-[0_0_12px_rgba(99,102,241,0.15)] cursor-pointer'
 				: 'border-gray-800 text-gray-700 cursor-not-allowed'
 		].join(' ')}
 	>
-		Submit →
+		<span>Send to Verify</span>
+		<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+			<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+		</svg>
 	</button>
 </div>
