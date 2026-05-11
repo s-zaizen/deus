@@ -2,11 +2,14 @@
 //!
 //! All `reqwest` traffic from the Rust core to the ML side goes through
 //! `MlClient`. Keeping the wire format (semgrep / analyze / taint /
-//! embed_with_graph / predict_batch / train / metrics) behind one type
+//! property_patterns / embed_with_graph / predict_batch / train / metrics) behind one type
 //! lets feature handlers stay free of `serde_json`/`reqwest` boilerplate
 //! and gives us a single seam to swap or mock for tests.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
 
 use anyhow::{anyhow, Result};
 use reqwest::{Client, RequestBuilder};
@@ -14,7 +17,7 @@ use serde::Deserialize;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::api::models::{Finding, Language, Severity};
+use crate::api::models::{AuditStepRunRequest, AuditStepRunResponse, Finding, Language, Severity};
 
 // ── Wire DTOs (kept private — callers see domain types) ────────────────────
 
@@ -74,14 +77,7 @@ impl MlClient {
     }
 
     pub fn with_base_url(base_url: String) -> Self {
-        // 120 s — generous enough to swallow CodeBERT + semgrep cold-
-        // start work on a fresh Cloud Run revision. The previous 30 s
-        // budget repeatedly tripped on `/semgrep` because the CLI's
-        // first-call rule parse alone takes 60 s+.
-        let http = Client::builder()
-            .timeout(Duration::from_secs(120))
-            .build()
-            .unwrap_or_default();
+        let http = shared_http_client().clone();
         Self { http, base_url }
     }
 
@@ -105,6 +101,26 @@ impl MlClient {
     pub async fn taint(&self, req_id: &str, code: &str, language: &Language) -> Vec<Finding> {
         self.detect("taint", "taint", req_id, code, language, false)
             .await
+    }
+
+    /// Run structural property-pattern checks. These catch correctness bugs
+    /// such as incomplete cache keys and mismatched parallel collections that
+    /// do not necessarily have a direct source-to-sink taint flow.
+    pub async fn property_patterns(
+        &self,
+        req_id: &str,
+        code: &str,
+        language: &Language,
+    ) -> Vec<Finding> {
+        self.detect(
+            "property_patterns",
+            "property",
+            req_id,
+            code,
+            language,
+            false,
+        )
+        .await
     }
 
     /// Embed each `(code, line_start)` window through the call-graph
@@ -279,14 +295,35 @@ impl MlClient {
         Ok(body)
     }
 
+    /// Run one LLM audit step through the ML-side provider adapter.
+    /// The API key is forwarded only for this request and is never stored
+    /// by the Rust core.
+    pub async fn audit_step(
+        &self,
+        req_id: &str,
+        req: &AuditStepRunRequest,
+    ) -> Result<AuditStepRunResponse> {
+        let url = format!("{}/audit_step", self.base_url);
+        let resp = self
+            .with_req_id(self.http.post(&url).json(req), req_id)
+            .send()
+            .await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let detail = resp.text().await.unwrap_or_else(|_| String::new());
+            return Err(anyhow!("ml /audit_step returned {status}: {detail}"));
+        }
+        Ok(resp.json().await?)
+    }
+
     // ── Internals ──────────────────────────────────────────────────
 
     fn with_req_id(&self, rb: RequestBuilder, req_id: &str) -> RequestBuilder {
         rb.header("x-request-id", req_id)
     }
 
-    /// Common wire layer for the three detectors. `endpoint` is the
-    /// last path segment ("semgrep" / "analyze" / "taint"), `source`
+    /// Common wire layer for ML-side detectors. `endpoint` is the
+    /// last path segment ("semgrep" / "analyze" / "taint" / ...), `source`
     /// is the value stamped onto each finding's `source` field.
     /// `require_ready` matches the analyzer's `status` gate.
     async fn detect(
@@ -351,6 +388,20 @@ impl MlClient {
 
 pub fn default_base_url() -> String {
     std::env::var("MAKINA_ML_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
+}
+
+fn shared_http_client() -> &'static Client {
+    static HTTP: OnceLock<Client> = OnceLock::new();
+    HTTP.get_or_init(|| {
+        // 120 s — generous enough to swallow CodeBERT + semgrep cold-
+        // start work on a fresh Cloud Run revision. The previous 30 s
+        // budget repeatedly tripped on `/semgrep` because the CLI's
+        // first-call rule parse alone takes 60 s+.
+        Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()
+            .unwrap_or_default()
+    })
 }
 
 /// Embeddings are stored as raw LE float32 bytes (3072 = 768 × 4).

@@ -3,6 +3,7 @@
 //! `findings` endpoints). Each slice owns its handler(s) and pulls
 //! in `infra::ml`, `store`, and `api::models` as needed.
 
+pub mod audit;
 pub mod findings;
 pub mod knowledge;
 pub mod labels;

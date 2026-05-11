@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# git pre-push hook: full lint + test suite before any push.
+# Activate via: git config core.hooksPath .codex/hooks
+set -euo pipefail
+
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+
+echo "pre-push: cargo clippy" >&2
+cargo clippy --quiet -- -D warnings || exit 1
+
+echo "pre-push: cargo test" >&2
+cargo test --quiet || exit 1
+
+echo "pre-push: ruff check" >&2
+ruff check ml/ || exit 1
+
+echo "pre-push: npm run check" >&2
+(cd frontend && npm run check --silent) || exit 1
+
+echo "pre-push: npm test (vitest)" >&2
+(cd frontend && npm test --silent) || exit 1
+
+# Python pytest needs xgboost / sklearn / tree-sitter, which normally
+# live in the `ml` container. Run pytest inside that container if it is
+# up; otherwise skip with a warning so unrelated changes do not force a
+# developer to spin up the full ML stack.
+if docker compose ps --status running --services 2>/dev/null | grep -q '^ml$'; then
+    echo "pre-push: pytest (in ml container)" >&2
+    docker compose exec -T ml pytest /ml/tests --quiet || exit 1
+else
+    echo "pre-push: SKIPPING pytest - ml container not running (start with 'docker compose up -d ml')" >&2
+fi

@@ -7,6 +7,7 @@
 		finding,
 		language,
 		onlabel,
+		onclose,
 		onfocus,
 		focused = false,
 		readonly = false,
@@ -15,6 +16,7 @@
 		finding: Finding;
 		language: Language;
 		onlabel?: (id: string, label: Label) => Promise<void>;
+		onclose?: (id: string) => Promise<void> | void;
 		onfocus?: () => void;
 		focused?: boolean;
 		readonly?: boolean;
@@ -43,6 +45,7 @@
 	let interactiveLabel = $state<Label | null>(null);
 	const labeled = $derived<Label | null>(readonly ? (existingLabel ?? null) : interactiveLabel);
 	let loading = $state(false);
+	let closing = $state(false);
 	let highlightedHtml = $state('');
 
 	const borderColor = $derived(severityBorderLeft[finding.severity]);
@@ -83,6 +86,17 @@
 			loading = false;
 		}
 	}
+
+	async function handleClose(e: MouseEvent) {
+		e.stopPropagation();
+		if (!onclose) return;
+		closing = true;
+		try {
+			await onclose(finding.id);
+		} finally {
+			closing = false;
+		}
+	}
 </script>
 
 <div
@@ -99,20 +113,20 @@
 	].join(' ')}
 >
 	<!-- Header -->
-	<div class="flex flex-wrap items-center gap-2">
+	<div class="flex flex-wrap items-center gap-1.5">
 		<span
-			class={`text-xs font-semibold px-2 py-0.5 rounded-full border ${severityStyles[finding.severity]} uppercase tracking-wide`}
+			class={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${severityStyles[finding.severity]} uppercase tracking-wide shrink-0`}
 		>
 			{finding.severity}
 		</span>
-		<span class="font-mono text-xs text-gray-300">{finding.rule_id}</span>
+		<span class="font-mono text-[10px] text-gray-300 shrink-0">{finding.rule_id}</span>
 		{#if finding.cwe}
-			<span class="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 border border-gray-600">
+			<span class="text-[10px] px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 border border-gray-600 shrink-0">
 				{finding.cwe}
 			</span>
 		{/if}
 		<span
-			class={`text-xs px-1.5 py-0.5 rounded font-mono border ${
+			class={`text-[10px] px-1.5 py-0.5 rounded font-mono border shrink-0 ${
 				isSemgrep
 					? 'bg-blue-950 text-blue-400 border-blue-800'
 					: isManual
@@ -123,17 +137,17 @@
 			{finding.source.toUpperCase()}
 		</span>
 		{#if finding.is_uncertain}
-			<span class="text-xs px-1.5 py-0.5 rounded bg-yellow-900 text-yellow-400 border border-yellow-700">
+			<span class="text-[10px] px-1.5 py-0.5 rounded bg-yellow-900 text-yellow-400 border border-yellow-700 shrink-0">
 				Uncertain
 			</span>
 		{/if}
 		{#if focused}
-			<span class="ml-auto text-xs text-indigo-400/70">↑ in editor</span>
+			<span class="ml-auto text-[10px] text-indigo-400/70 shrink-0">↑ in editor</span>
 		{/if}
 	</div>
 
 	<!-- Message -->
-	<p class="text-sm text-gray-200 leading-snug">{finding.message}</p>
+	<p class="text-xs text-gray-200 leading-snug">{finding.message}</p>
 
 	<!-- Code snippet -->
 	{#if finding.code_snippet}
@@ -143,13 +157,12 @@
 			</div>
 			{#if highlightedHtml}
 				<div
-					class="shiki-snippet"
-					style="max-height:10rem; overflow-y:auto; font-size:0.72rem; line-height:1.55;"
+					class="shiki-snippet max-h-40 overflow-y-auto text-[11px] leading-relaxed"
 				>
 					{@html highlightedHtml}
 				</div>
 			{:else}
-				<pre class="text-gray-300 text-xs p-2 overflow-x-auto">{finding.code_snippet}</pre>
+				<pre class="text-gray-300 text-xs p-2 overflow-x-auto max-h-40">{finding.code_snippet}</pre>
 			{/if}
 		</div>
 	{/if}
@@ -177,12 +190,12 @@
 			</div>
 		{/if}
 	{:else}
-		<div class="flex gap-2 mt-1">
+		<div class="grid grid-cols-2 gap-2 mt-1">
 			<button
 				onclick={(e) => handleLabel('tp', e)}
-				disabled={loading || labeled !== null}
+				disabled={loading || closing || labeled !== null}
 				class={[
-					'flex-1 flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded border transition-colors',
+					'flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded border transition-colors',
 					labeled === 'tp'
 						? 'bg-green-700 border-green-600 text-white'
 						: labeled === 'fp'
@@ -202,9 +215,9 @@
 
 			<button
 				onclick={(e) => handleLabel('fp', e)}
-				disabled={loading || labeled !== null}
+				disabled={loading || closing || labeled !== null}
 				class={[
-					'flex-1 flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded border transition-colors',
+					'flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded border transition-colors',
 					labeled === 'fp'
 						? 'bg-red-700 border-red-600 text-white'
 						: labeled === 'tp'
@@ -221,6 +234,22 @@
 				{/if}
 				False Positive
 			</button>
+
+			{#if onclose}
+				<button
+					onclick={handleClose}
+					disabled={loading || closing || labeled !== null}
+					class={[
+						'col-span-2 flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded border transition-colors',
+						labeled
+							? 'bg-gray-800 border-gray-700 text-gray-500 cursor-not-allowed'
+							: 'bg-gray-900/70 border-gray-700 text-gray-300 hover:bg-gray-800 hover:border-gray-600 cursor-pointer'
+					].join(' ')}
+				>
+					<span>&#8722;</span>
+					{closing ? 'Closing...' : 'Close Case'}
+				</button>
+			{/if}
 		</div>
 	{/if}
 </div>

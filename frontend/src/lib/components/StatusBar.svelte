@@ -16,7 +16,7 @@
 {#if !stats}
 	<div class="h-9 bg-gray-900 border-t border-gray-700"></div>
 {:else}
-	<div class="h-9 bg-gray-900 border-t border-gray-700 flex items-center px-4 gap-4 text-sm">
+	<div class="no-scrollbar flex h-9 min-w-0 items-center gap-3 overflow-hidden whitespace-nowrap border-t border-gray-700 bg-gray-900 px-3 text-xs sm:gap-4 sm:px-4 sm:text-sm">
 		<div class="flex items-center gap-1.5">
 			<span class="text-gray-600 text-[10px] uppercase tracking-wider font-semibold">Labels</span>
 			<span class="text-gray-200 font-semibold tabular-nums">{stats.total_labels}</span>

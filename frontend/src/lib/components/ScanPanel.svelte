@@ -19,23 +19,36 @@
 		onlanguagechange,
 		onscan,
 		scanning,
-		hasFindings,
-		onsubmittoverify
+		actionEnabled,
+		onaction,
+		compact = false,
+		actionLabel = 'Send to Audit',
+		compactActionLabel = 'Audit'
 	}: {
 		language: Language;
 		onlanguagechange: (lang: Language) => void;
 		onscan: () => void;
 		scanning: boolean;
-		hasFindings: boolean;
-		onsubmittoverify: () => void;
+		actionEnabled: boolean;
+		onaction: () => void;
+		compact?: boolean;
+		actionLabel?: string;
+		compactActionLabel?: string;
 	} = $props();
+
+	const scanLabel = $derived(scanning ? (compact ? 'Scanning' : 'Scanning...') : 'Scan');
+	const sendLabel = $derived(compact ? compactActionLabel : actionLabel);
 </script>
 
-<div class="flex items-center gap-2">
+<div class={compact ? 'flex flex-nowrap items-center gap-1.5 overflow-hidden' : 'flex flex-wrap items-center gap-2'}>
 	<select
 		value={language}
 		onchange={(e) => onlanguagechange((e.currentTarget as HTMLSelectElement).value as Language)}
-		class="px-2.5 py-1 text-xs font-medium bg-gray-800 text-gray-300 border border-gray-700 rounded focus:outline-none focus:border-indigo-500 cursor-pointer"
+		aria-label="Language"
+		class={[
+			'rounded border border-gray-700 bg-gray-800 py-1 text-xs font-medium text-gray-300 focus:border-indigo-500 focus:outline-none cursor-pointer',
+			compact ? 'w-[5.5rem] shrink-0 px-1.5' : 'min-w-[6rem] flex-1 sm:flex-none px-2.5'
+		].join(' ')}
 	>
 		{#each LANGUAGES as l}
 			<option value={l.value}>{l.label}</option>
@@ -46,10 +59,11 @@
 		onclick={onscan}
 		disabled={scanning}
 		class={[
-			'flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all',
+			'flex items-center justify-center gap-1 rounded-lg text-xs font-semibold transition-all',
+			compact ? 'shrink-0 px-2 py-1 min-w-[4rem]' : 'min-w-[5.5rem] px-3.5 py-1.5 gap-1.5',
 			scanning
 				? 'bg-green-800/80 text-green-300 cursor-not-allowed'
-				: 'bg-green-600 hover:bg-green-500 hover:shadow-[0_0_12px_rgba(22,163,74,0.25)] text-white cursor-pointer'
+				: 'bg-green-600 hover:bg-green-500 text-white cursor-pointer'
 		].join(' ')}
 	>
 		{#if scanning}
@@ -57,28 +71,29 @@
 				<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
 				<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
 			</svg>
-			Scanning…
+			{scanLabel}
 		{:else}
 			<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
 				<path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
 			</svg>
-			Scan
+			{scanLabel}
 		{/if}
 	</button>
 
-	<div class="w-px h-4 bg-gray-700/60"></div>
+	<div class={compact ? 'hidden' : 'hidden h-4 w-px bg-gray-700/60 sm:block'}></div>
 
 	<button
-		onclick={onsubmittoverify}
-		disabled={!hasFindings || scanning}
+		onclick={onaction}
+		disabled={!actionEnabled || scanning}
 		class={[
-			'flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold border transition-all',
-			hasFindings && !scanning
-				? 'border-indigo-500/60 text-indigo-300 hover:bg-indigo-900/30 hover:border-indigo-500 hover:shadow-[0_0_12px_rgba(99,102,241,0.15)] cursor-pointer'
+			'flex items-center justify-center gap-1 rounded-lg border text-xs font-semibold transition-all',
+			compact ? 'shrink-0 px-2 py-1 min-w-[4.5rem]' : 'min-w-[7rem] px-3.5 py-1.5 gap-1.5',
+			actionEnabled && !scanning
+				? 'border-indigo-500/60 text-indigo-300 hover:bg-indigo-900/30 hover:border-indigo-500 cursor-pointer'
 				: 'border-gray-800 text-gray-700 cursor-not-allowed'
 		].join(' ')}
 	>
-		<span>Send to Verify</span>
+		<span class="whitespace-nowrap">{sendLabel}</span>
 		<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
 			<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
 		</svg>

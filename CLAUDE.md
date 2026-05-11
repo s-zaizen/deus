@@ -10,7 +10,7 @@ Instructions for AI assistants working in this repository.
 
 - **Continuous learning** — the model trains from the first label onward; there are no threshold gates. `model_stage` is a maturity label, not a capability switch.
 - **Retrain trigger** — `DELETE /api/verify/queue/:case_no` (Verify Submit) always calls `POST /train` on the ML service. Do not remove or gate this call.
-- **Scan pipeline** — semgrep, CodeBERT semantic analysis, and taint engine run in parallel; results are merged and deduplicated by CWE.
+- **Scan pipeline** — semgrep, CodeBERT semantic analysis, taint engine, and structural property-pattern checks run in parallel; results are merged and deduplicated by CWE.
 - **Rust = orchestration, Python = ML** — scanner logic lives in `ml/`; the Rust crate calls it over HTTP. Do not move ML logic into Rust.
 
 ## Running Locally

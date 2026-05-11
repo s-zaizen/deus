@@ -1,6 +1,8 @@
 """semgrep-based rule scanner — wraps the bundled community rules."""
+
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -25,11 +27,15 @@ SEV_MAP = {"ERROR": "critical", "WARNING": "high", "INFO": "medium"}
 
 
 def _detect_language(code: str) -> str:
-    if "def " in code and ("import " in code or "from " in code):
+    if re.search(r"^\s*(?:async\s+)?def\s+[A-Za-z_]\w*\s*\(", code, re.MULTILINE):
         return "python"
-    if "fn " in code and ("let " in code or "pub " in code or "use " in code):
+    if re.search(
+        r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+[A-Za-z_]\w*\s*\(",
+        code,
+        re.MULTILINE,
+    ):
         return "rust"
-    if "func " in code and "package " in code:
+    if re.search(r"^\s*func\s+(?:\([^)]*\)\s*)?[A-Za-z_]\w*\s*\(", code, re.MULTILINE):
         return "go"
     if "public class " in code or "import java." in code:
         return "java"
@@ -104,7 +110,9 @@ def scan(code: str, language: str) -> dict:
         return {"status": "ok", "findings": [], "language": effective_lang}
 
     ext = LANG_EXT.get(effective_lang, ".txt")
-    with tempfile.NamedTemporaryFile(mode="w", suffix=ext, delete=False, encoding="utf-8") as f:
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=ext, delete=False, encoding="utf-8"
+    ) as f:
         f.write(code)
         tmpfile = f.name
 
@@ -124,7 +132,7 @@ def scan(code: str, language: str) -> dict:
         )
         # semgrep exits 0 (no findings) or 1 (findings) on success; ≥2 on error
         if proc.returncode >= 2:
-            return {"status": "ok", "findings": [], "language": language}
+            return {"status": "ok", "findings": [], "language": effective_lang}
 
         data = json.loads(proc.stdout)
         source_lines = code.splitlines()
@@ -135,7 +143,7 @@ def scan(code: str, language: str) -> dict:
         }
 
     except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
-        return {"status": "ok", "findings": [], "language": language}
+        return {"status": "ok", "findings": [], "language": effective_lang}
 
     finally:
         os.unlink(tmpfile)

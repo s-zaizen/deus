@@ -87,3 +87,30 @@ export interface KnowledgeCase {
   submittedAt: string;
   verifiedAt: string;
 }
+
+export type AuditProvider = "openai" | "anthropic";
+
+export interface AuditCase {
+  id: string;
+  scanId: string | null;
+  code: string;
+  language: Language;
+  findings: Finding[];
+  createdAt: string;
+}
+
+export type AuditStepStatus = "idle" | "running" | "complete" | "error";
+
+export interface AuditStepResult {
+  id: string;
+  title: string;
+  status: AuditStepStatus;
+  output: string;
+  error: string | null;
+  durationMs: number | null;
+}
+
+export interface AuditRunResponse {
+  results: AuditStepResult[];
+  reportMarkdown: string;
+}

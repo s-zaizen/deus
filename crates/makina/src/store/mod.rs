@@ -34,29 +34,32 @@ fn makina_dir() -> std::path::PathBuf {
     // Tests redirect storage to a tempdir via this env var; in production
     // it stays unset and we fall back to `~/.makina`.
     if let Ok(custom) = std::env::var("MAKINA_HOME") {
-        return std::path::PathBuf::from(custom);
+        let path = std::path::PathBuf::from(custom);
+        if !path.as_os_str().is_empty() {
+            return path;
+        }
     }
     dirs::home_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".makina")
 }
 
+fn open_db(file_name: &str) -> Result<Connection> {
+    let dir = makina_dir();
+    std::fs::create_dir_all(&dir)?;
+    Ok(Connection::open(dir.join(file_name))?)
+}
+
 fn open_feedback() -> Result<Connection> {
-    let path = makina_dir().join("feedback.db");
-    std::fs::create_dir_all(path.parent().unwrap())?;
-    Ok(Connection::open(path)?)
+    open_db("feedback.db")
 }
 
 fn open_verify() -> Result<Connection> {
-    let path = makina_dir().join("verify.db");
-    std::fs::create_dir_all(path.parent().unwrap())?;
-    Ok(Connection::open(path)?)
+    open_db("verify.db")
 }
 
 fn open_knowledge() -> Result<Connection> {
-    let path = makina_dir().join("knowledge.db");
-    std::fs::create_dir_all(path.parent().unwrap())?;
-    Ok(Connection::open(path)?)
+    open_db("knowledge.db")
 }
 
 pub fn init_db() -> Result<()> {
@@ -531,5 +534,20 @@ mod tests {
         // Calling init again on the same tempdir must not error.
         init_db().expect("re-init");
         init_db().expect("third init");
+    }
+
+    #[test]
+    #[serial]
+    fn empty_makina_home_uses_default_dir_without_panicking() {
+        let prev = std::env::var("MAKINA_HOME").ok();
+        std::env::set_var("MAKINA_HOME", "");
+
+        let dir = makina_dir();
+        assert!(!dir.as_os_str().is_empty());
+
+        match prev {
+            Some(v) => std::env::set_var("MAKINA_HOME", v),
+            None => std::env::remove_var("MAKINA_HOME"),
+        }
     }
 }

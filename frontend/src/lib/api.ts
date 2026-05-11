@@ -111,6 +111,13 @@ export async function addToVerifyQueue(
 	return mapCase(item);
 }
 
+export async function closeVerifyCase(caseNo: number): Promise<void> {
+	const res = await fetch(`${BASE}/api/verify/queue/${caseNo}`, {
+		method: 'DELETE'
+	});
+	if (!res.ok) throw new Error(`Queue close failed: ${res.status}`);
+}
+
 // ── Knowledge ─────────────────────────────────────────────────────────────────
 
 interface BackendKnowledgeCase {

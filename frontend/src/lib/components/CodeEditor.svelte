@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-	import type * as MonacoType from 'monaco-editor';
+	import type * as MonacoType from 'monaco-editor/esm/vs/editor/editor.api';
 	import type { Finding, Language } from '$lib/types';
 
 	let {
@@ -44,6 +44,7 @@
 	let findingDecs: MonacoType.editor.IEditorDecorationsCollection | null = null;
 	let focusDecs: MonacoType.editor.IEditorDecorationsCollection | null = null;
 	let updating = false;
+	let resizeObserver: ResizeObserver | null = null;
 
 	const lineCount = $derived(value.split('\n').length);
 
@@ -110,6 +111,22 @@
 		});
 	}
 
+	function syncResponsiveOptions(instance: MonacoType.editor.IStandaloneCodeEditor) {
+		const compact = containerEl.clientWidth < 520;
+		instance.updateOptions({
+			glyphMargin: !compact,
+			folding: !compact,
+			lineNumbersMinChars: compact ? 3 : 5,
+			minimap: {
+				enabled: !compact,
+				scale: 1,
+				renderCharacters: false,
+				maxColumn: 80
+			}
+		});
+		instance.layout();
+	}
+
 	onMount(() => {
 		let disposeEditor: (() => void) | null = null;
 
@@ -119,7 +136,19 @@
 				getWorker: () => new EditorWorker()
 			};
 
-			const monaco = await import('monaco-editor');
+			const [
+				monaco
+			] = await Promise.all([
+				import('monaco-editor/esm/vs/editor/editor.api'),
+				import('monaco-editor/esm/vs/basic-languages/cpp/cpp.contribution'),
+				import('monaco-editor/esm/vs/basic-languages/go/go.contribution'),
+				import('monaco-editor/esm/vs/basic-languages/java/java.contribution'),
+				import('monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution'),
+				import('monaco-editor/esm/vs/basic-languages/python/python.contribution'),
+				import('monaco-editor/esm/vs/basic-languages/ruby/ruby.contribution'),
+				import('monaco-editor/esm/vs/basic-languages/rust/rust.contribution'),
+				import('monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution')
+			]);
 			monacoRef = monaco;
 
 			setupTheme(monaco);
@@ -168,7 +197,14 @@
 			});
 
 			editor = instance;
-			disposeEditor = () => instance.dispose();
+			syncResponsiveOptions(instance);
+			resizeObserver = new ResizeObserver(() => syncResponsiveOptions(instance));
+			resizeObserver.observe(containerEl);
+			disposeEditor = () => {
+				resizeObserver?.disconnect();
+				resizeObserver = null;
+				instance.dispose();
+			};
 		})();
 
 		return () => {
@@ -236,24 +272,46 @@
 		}]);
 	});
 
-	function handleDragOver(e: DragEvent) {
-		if (!onFolderDrop) return;
-		e.preventDefault();
-		dragging = true;
+	function dropItem(e: DragEvent): DataTransferItem | null {
+		if (!onFolderDrop) return null;
+		return Array.from(e.dataTransfer?.items ?? []).find((item) => item.kind === 'file') ?? null;
 	}
-	function handleDragLeave() { dragging = false; }
-	function handleDrop(e: DragEvent) {
+
+	function handleDragEnter(e: DragEvent) {
+		if (!dropItem(e)) return;
 		e.preventDefault();
-		dragging = false;
+		if (!dragging) dragging = true;
+	}
+
+	function handleDragOver(e: DragEvent) {
+		if (!dropItem(e)) return;
+		e.preventDefault();
+		if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+		if (!dragging) dragging = true;
+	}
+
+	function handleDragLeave(e: DragEvent) {
 		if (!onFolderDrop) return;
-		const item = e.dataTransfer?.items[0];
-		if (item) onFolderDrop(item);
+		const current = e.currentTarget as HTMLElement;
+		const related = e.relatedTarget as Node | null;
+		if (related && current.contains(related)) return;
+
+		dragging = false;
+	}
+
+	function handleDrop(e: DragEvent) {
+		const item = dropItem(e);
+		if (!item) return;
+		dragging = false;
+		e.preventDefault();
+		onFolderDrop?.(item);
 	}
 </script>
 
 <div
 	class="flex flex-col h-full relative"
 	style="background:#0b1120;"
+	ondragenter={handleDragEnter}
 	ondragover={handleDragOver}
 	ondragleave={handleDragLeave}
 	ondrop={handleDrop}
@@ -263,7 +321,7 @@
 	<!-- Drag overlay -->
 	{#if dragging}
 		<div
-			class="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded"
+			class="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded"
 			style="background:#0b1120ee; border:2px dashed #4f46e5;"
 		>
 			<svg class="w-10 h-10 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">

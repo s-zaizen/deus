@@ -28,23 +28,31 @@ The Python ML service follows the same shape on a smaller scale: thin
 FastAPI handlers in `server.py` delegate to `services/` modules
 (currently `training.py` for the GBDT pipeline) so the wire format stays
 separate from the ML code path. The `analyzer.py`, `embedder.py`,
-`taint_engine.py`, etc. modules are the domain core that services compose.
+`taint_engine.py`, `property_patterns/`, etc. modules are the domain core
+that services compose.
 
 The frontend follows MVVM-ish separation: `lib/api.ts` is the network
 boundary, `lib/types.ts` the shared contract, `lib/components/` the
 view layer, and `+page.svelte` the page-level state coordinator.
+Frontend test tooling stays on Vitest 3.x with Vite 6.x, and
+`package.json` pins SvelteKit's transitive `cookie` dependency to
+`0.7.2` via npm overrides so `npm audit --audit-level=low` remains
+clean without changing the SvelteKit major line. Monaco is loaded from
+the narrow `editor.api` ESM entry and split with Vite manual chunks so
+the editor stays lazy-loaded instead of becoming one oversized bundle.
 
 ## System Components
 
 ```
 ┌─────────────────────────────────────────────────────┐
 │  Browser (SvelteKit)                                │
-│  Scan tab → Verify tab → Knowledge tab              │
+│  Scan tab → Audit tab → Verify tab → Knowledge tab  │
 └────────────────────┬────────────────────────────────┘
                      │ HTTP
 ┌────────────────────▼────────────────────────────────┐
 │  Rust core  (axum)            :7373                 │
 │  - /api/scan                                        │
+│  - /api/audit/run     (POST — server LLM workflow)  │
 │  - /api/feedback                                    │
 │  - /api/verify/queue  (GET / POST / DELETE)         │
 │  - /api/knowledge     (GET / POST[?skip_train])     │
@@ -60,10 +68,12 @@ view layer, and `+page.svelte` the page-level state coordinator.
 │  - /semgrep   rule-based scan (semgrep + taint)     │
 │  - /analyze   CodeBERT semantic similarity          │
 │  - /taint     interprocedural taint flow            │
+│  - /property_patterns structural property checks     │
 │  - /embed_with_graph  call-graph-augmented embeds   │
 │  - /train         GBDT retrain on all labels        │
 │  - /predict       GBDT confidence (768-dim embed)   │
 │  - /predict_batch GBDT confidence, N embeddings     │
+│  - /audit_step    OpenAI / Anthropic SDK call       │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -128,45 +138,126 @@ ephemeral — there is no persistent volume, so `feedback.db` /
 `knowledge.db` / `model.json` reset on every revision. Public mode
 (the default for this deployment) disables every learning-loop write
 endpoint, so the lack of persistence is by design: the model ships as
-a frozen artefact baked into the image.
+a frozen artefact baked into the image. `/api/scan` still runs the
+detectors and frozen-model scoring in public mode, but it does not
+persist unlabeled findings to `feedback.db`.
 
 ## Scan Pipeline
 
-For each scan request, three detectors run in parallel and are merged:
+For each scan request, four detectors run in parallel and are merged:
 
 1. **semgrep** — community rules + custom taint rules (YAML)
 2. **CodeBERT semantic** — see *"ML analysis gate"* below
 3. **taint engine** — tree-sitter BFS from sources to sinks, cross-function
+4. **property patterns** — structural correctness checks for incomplete
+   cache/dedup keys, mismatched parallel collections, unchecked verifier
+   booleans, repeated mutable reads, unbounded attacker-controlled sizes,
+   and formatted command/interpreter strings built from externally
+   derived parameters
+
+Merge deduplicates near-overlapping findings by CWE/rule. When two
+detectors report the same issue with the same severity, the richer
+evidence source wins (`taint` path before `semgrep`, then structural
+property checks, then semantic ML) so the Verify/LLM handoff keeps the
+most actionable context instead of the noisiest duplicate.
+
+Property-pattern checks are intentionally language-neutral where possible.
+For example, `PROP-FORMATTED-COMMAND` does not key on one project-specific
+C API; it combines function-parameter provenance, string formatting or
+concatenation, sanitizer-looking calls, and generic command/interpreter
+sink names to surface CWE-78 style command construction across C, C++,
+JavaScript/TypeScript, Python, and similar syntax families. These checks
+are heuristic evidence generators; the Audit workflow should validate
+caller reachability and trust-boundary evidence before treating them as
+externally exploitable vulnerabilities.
 
 After merge, each finding is embedded with call-graph-augmented context
-(enclosing function + 1-hop callees) and stored in SQLite. The Rust core
-then calls `POST /predict_batch` with every finding's embedding to get a
-GBDT probability, and blends:
+(enclosing function + 1-hop callees). The Rust core calls
+`POST /predict_batch` with every finding's embedding to get a GBDT
+probability, and blends:
 
 ```
 finding.confidence = 0.5 × heuristic_score + 0.5 × gbdt_probability
 ```
 
 If the GBDT model isn't trained yet (`model.json` absent), the heuristic
-score is kept unchanged. This is how the accumulated labels actually
-influence scan output.
+score is kept unchanged. In dev/private mode the same embeddings are
+stored in SQLite so later TP/FP labels can train the model. Public mode
+skips that unlabeled persistence path.
+
+CodeBERT embedding calls are internally chunked (`MAKINA_EMBED_BATCH_SIZE`,
+default 32) to keep memory bounded on large files and folder scans.
+
+## LLM Audit Workflow
+
+The Scan tab can hand the current scan result to the Audit tab instead
+of immediately submitting it to Verify. This creates an in-memory
+`AuditCase` containing the scan id, language, code, findings, and
+timestamp. Audit does not mutate the learning corpus and does not trigger
+model retraining.
+
+The Audit tab only collects provider settings (`openai` or `anthropic`),
+model, max output tokens, and API key, then calls `POST /api/audit/run`.
+The Rust core owns the fixed audit workflow and prompt assembly. It runs
+the backend-managed steps sequentially, passing each step the scan
+context plus prior step outputs.
+
+The backend workflow is report-first and intentionally evidence-bound:
+
+1. **Evidence Triage** — group scanner findings into reportable
+   candidates, likely false positives, and needs-review items.
+2. **Trace Validation** — validate candidates with source-to-sink,
+   sanitizer/guard, sink, and reachability evidence.
+3. **Report Generation** — self-review prior outputs and produce exactly
+   one Markdown report section per scanner finding. Headings are mapped
+   through the backend's Report ID Map as `MAKINA-001`, `MAKINA-002`,
+   etc., even when multiple findings share a CWE. Sections include
+   Vulnerability Details, Impact, Proof of Concept, Remediation,
+   Verification Notes, and Confidence.
+
+This shape follows three research patterns: ReAct-style staged
+reasoning/action loops, Reflexion-style self-review before final output,
+and DL/DLAP-style prompting that treats scanner/ML findings as evidence
+rather than ground truth. The source-to-sink validation step is aligned
+with the long-standing taint-analysis framing used by TaintCheck.
+Reference papers: ReAct (Yao et al., 2022), Reflexion (Shinn et al.,
+2023), DLAP (Yang et al., 2024), and TaintCheck / Dynamic Taint Analysis
+(Newsome and Song, NDSS 2005).
+
+Provider calls use official Python SDKs in the ML service: `openai` for
+OpenAI Responses API calls and `anthropic` for Anthropic Messages API
+calls. Rust forwards only a single request-scoped provider call at a time
+to ML `/audit_step` and never persists the API key. The report generation
+step gets at least 4000 output tokens because it must cover every
+finding. If the provider returns no final report text after successful
+triage/trace steps, Rust falls back to a deterministic per-finding
+Markdown report derived from scanner evidence. The response includes both
+raw step results and `report_markdown` for the final report viewer. The
+UI keeps keys in memory unless the user chooses to remember them in
+browser `localStorage`.
 
 ### ML analysis gate (hybrid, GBDT-first)
 
 `/analyze` uses a hybrid gate so CodeBERT's noisy similarity alone cannot
 flood a scan with false positives. For each sliding window:
 
-1. **Sink regex (primary)** — the window is emitted immediately if any
-   per-CWE sink regex (`eval`, `system`, `pickle.loads`,
-   `r_core_call_str_at`, `Runtime.getRuntime().exec`, …) matches inside
-   it. Sinks are ground truth for this detector; the GBDT is *not*
-   consulted.
+1. **Sink regex (primary)** — each distinct per-CWE sink regex match
+   (`eval`, `system`, `pickle.loads`, `r_core_call_str_at`,
+   `Runtime.getRuntime().exec`, …) inside the window is emitted
+   immediately. Sinks are ground truth for this detector; the GBDT is
+   *not* consulted.
 2. **Similarity + GBDT (secondary)** — otherwise the window must satisfy
    BOTH of:
    - CWE prototype cosine similarity ≥ `CWE_CLASSIFY_THRESHOLD` (0.95)
    - GBDT probability ≥ `GBDT_GATE_THRESHOLD` (0.70)
 3. **GBDT absent** — when `model.json` does not exist yet, the analyzer
-   falls back to pure similarity with the old 0.80 threshold.
+   still emits sink-regex matches immediately and only uses the old 0.80
+   similarity threshold for non-sink windows.
+
+The sink path is independent of CodeBERT readiness: if the embedding
+model is still loading, `/analyze` can still return high-confidence
+sink-regex findings with `mode: "sink-only"` instead of blocking the
+static-analysis signal behind model warm-up.
 
 Empirically this cut gson's false-positive count from ~600 to ~7 while
 keeping recall on the radare2 `r_core_call_str_at` case-study. The
@@ -180,7 +271,7 @@ narrows each window match to a tight range via (in order of preference):
 
 1. **Sink regex** — per-CWE regex of known dangerous calls (`eval`,
    `system`, `pickle.loads`, `r_core_call_str_at`, …). If a sink matches
-   inside the window, the finding is pinned to that line ± 2.
+   inside the window, each finding is pinned to its sink line ± 2.
 2. **Embedding peak** — otherwise, re-score each line within the window
    against the matched CWE patterns and center the range on the highest-
    similarity line.
@@ -191,7 +282,7 @@ The `refined_by` field on each finding records which path was taken.
 ## Learning Loop
 
 ```
-Scan → findings stored with CodeBERT embedding vectors
+Scan → findings stored with CodeBERT embedding vectors (dev/private mode)
   ↓
 Human reviews in Verify tab (TP / FP labels)
   ↓
@@ -444,15 +535,17 @@ makina/
 │       ├── analyzer.py    CodeBERT semantic analysis
 │       ├── embedder.py    CodeBERT embedding (lazy-loaded)
 │       ├── taint_engine.py interprocedural taint via tree-sitter
+│       ├── property_patterns/ structural property-pattern checks
 │       ├── call_graph.py  call graph extraction (AST + regex fallback)
 │       ├── features.py    50-element hand-crafted feature vector
 │       ├── logging_config.py  JSON logging + request_id contextvar
 │       └── semgrep_scanner.py  semgrep wrapper + language detection
-├── frontend/              SvelteKit UI (Svelte 5 Runes, adapter-node)
+├── frontend/              SvelteKit UI (Svelte 5 Runes, adapter-static)
 │   └── src/
 │       ├── routes/        +page.svelte (main layout + state), +layout.ts
 │       └── lib/
-│           ├── components/ CodeEditor, FileTree, FindingCard, VerifyTab, KnowledgeTab …
+│           ├── components/ CodeEditor, FileTree, FindingCard, AuditTab, VerifyTab, KnowledgeTab …
+│           ├── audit.ts   Audit run client (Rust /api/audit/run boundary)
 │           ├── highlighter.ts  shiki singleton (vitesse-dark theme)
 │           ├── api.ts     fetch wrappers (PUBLIC_API_URL)
 │           ├── types.ts   shared TypeScript types
@@ -468,6 +561,12 @@ makina/
 │   ├── hooks/prepush-gate.sh PreToolUse (Bash): intercepts git push for Claude
 │   ├── rules/               Path-scoped rules (backend.md, ml.md, frontend.md)
 │   └── settings.json        Hook bindings (PreToolUse + PostToolUse)
+├── .codex/                Codex configuration and playbooks
+│   ├── commands/          vuln-add, vuln-verify, vuln-add-verify-with-codex
+│   ├── checks/check-path.sh explicit post-edit path-scoped checker
+│   ├── hooks/pre-push       git pre-push hook: clippy + test + ruff + npm check
+│   └── rules/               Path-scoped rules (backend.md, ml.md, frontend.md)
+├── AGENTS.md              Codex instructions for this repo
 ├── CLAUDE.md              AI assistant instructions for this repo
 ├── CONTRIBUTING.md        Commit conventions, dev setup, code style
 └── docs/ARCHITECTURE.md   this file

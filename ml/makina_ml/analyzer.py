@@ -15,6 +15,7 @@ Detection layers (cheap → expensive):
   3. Hardcoded CWE prototypes (VULN_PATTERNS below). Used as a fallback
      when the labeled index is empty or the embedder is not ready.
 """
+
 from __future__ import annotations
 
 import logging
@@ -42,11 +43,11 @@ VULN_PATTERNS: dict = {
         "severity": "critical",
         "patterns": [
             'cursor.execute("SELECT * FROM users WHERE name=\'" + name + "\'")',
-            'db.query(f"INSERT INTO logs VALUES (\'{user_input}\')")',
+            "db.query(f\"INSERT INTO logs VALUES ('{user_input}')\")",
             'db.query("SELECT * FROM users WHERE id=" + userId)',
-            'connection.query(`DELETE FROM ${table} WHERE id=${id}`)',
+            "connection.query(`DELETE FROM ${table} WHERE id=${id}`)",
             'stmt.executeQuery("SELECT * FROM users WHERE user=\'" + user + "\'")',
-            'User.where("name = \'#{params[:name]}\'")',
+            "User.where(\"name = '#{params[:name]}'\")",
             'db.Query("SELECT * FROM users WHERE name=\'" + name + "\'")',
         ],
     },
@@ -164,7 +165,8 @@ SINK_REGEX: dict[str, re.Pattern] = {
     "CWE-78": re.compile(
         r"\b(os\.system|subprocess\.(?:call|run|Popen|check_output)|os\.popen|"
         r"child_process\.(?:exec|execSync|spawn)|Runtime\.getRuntime\(\)\.exec|"
-        r"exec\.Command|shell_exec|passthru|pcntl_exec|popen|execve|execvp)\s*\("
+        r"exec\.Command|exec|execSync|spawn|shell_exec|passthru|pcntl_exec|popen|"
+        r"execve|execvp)\s*\("
         r"|shell\s*=\s*True",
     ),
     "CWE-89": re.compile(
@@ -198,18 +200,28 @@ SINK_REGEX: dict[str, re.Pattern] = {
 }
 
 
-def _find_sink_line(cwe: str, lines: list[str], win_start: int, win_end: int) -> Optional[int]:
-    """Return 1-indexed line of the first regex sink match inside the window,
-    or None. window bounds are 1-indexed inclusive."""
+def _find_sink_match(
+    cwe: str, lines: list[str], win_start: int, win_end: int
+) -> "tuple[int, tuple[int, int]] | None":
+    """Return 1-indexed line and match span of the first sink match inside
+    the window, or None. window bounds are 1-indexed inclusive."""
     pat = SINK_REGEX.get(cwe)
     if pat is None:
         return None
     lo = max(0, win_start - 1)
     hi = min(len(lines), win_end)
     for i in range(lo, hi):
-        if pat.search(lines[i]):
-            return i + 1
+        match = pat.search(lines[i])
+        if match:
+            return i + 1, match.span()
     return None
+
+
+def _find_sink_line(
+    cwe: str, lines: list[str], win_start: int, win_end: int
+) -> Optional[int]:
+    match = _find_sink_match(cwe, lines, win_start, win_end)
+    return match[0] if match is not None else None
 
 
 # ── Prototype / labeled index ───────────────────────────────────────────────
@@ -251,12 +263,14 @@ def _build_hardcoded_index() -> list:
                 normed.append(v / n)
         if not normed:
             continue
-        index.append({
-            "cwe": cwe,
-            "name": info["name"],
-            "severity": info["severity"],
-            "pattern_vecs": np.asarray(normed, dtype=np.float32),
-        })
+        index.append(
+            {
+                "cwe": cwe,
+                "name": info["name"],
+                "severity": info["severity"],
+                "pattern_vecs": np.asarray(normed, dtype=np.float32),
+            }
+        )
     return index
 
 
@@ -297,12 +311,14 @@ def _build_labeled_index() -> list:
             step = len(vecs) // MAX_LABELED_PER_CWE
             vecs = vecs[::step][:MAX_LABELED_PER_CWE]
         meta = VULN_PATTERNS.get(cwe, {})
-        index.append({
-            "cwe": cwe,
-            "name": meta.get("name", cwe),
-            "severity": meta.get("severity", "medium"),
-            "pattern_vecs": np.asarray(vecs, dtype=np.float32),
-        })
+        index.append(
+            {
+                "cwe": cwe,
+                "name": meta.get("name", cwe),
+                "severity": meta.get("severity", "medium"),
+                "pattern_vecs": np.asarray(vecs, dtype=np.float32),
+            }
+        )
     return index
 
 
@@ -352,6 +368,7 @@ def _load_gbdt():
             return None
         try:
             import xgboost as xgb
+
             m = xgb.XGBClassifier()
             m.load_model(str(MODEL_PATH))
             _gbdt_model = m
@@ -380,14 +397,19 @@ def _get_cwe_index() -> "list[dict] | None":
 
 # ── Language detection + chunking ───────────────────────────────────────────
 
+
 def _detect_language(code: str, hint: Optional[str]) -> str:
     if hint and hint.lower() not in ("auto", "unknown", ""):
         return hint.lower()
-    if "def " in code and ("import " in code or "from " in code):
+    if re.search(r"^\s*(?:async\s+)?def\s+[A-Za-z_]\w*\s*\(", code, re.MULTILINE):
         return "python"
-    if "fn " in code and ("let " in code or "pub " in code or "use " in code):
+    if re.search(
+        r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+[A-Za-z_]\w*\s*\(",
+        code,
+        re.MULTILINE,
+    ):
         return "rust"
-    if "func " in code and "package " in code:
+    if re.search(r"^\s*func\s+(?:\([^)]*\)\s*)?[A-Za-z_]\w*\s*\(", code, re.MULTILINE):
         return "go"
     if "public class " in code or "import java." in code:
         return "java"
@@ -403,9 +425,24 @@ def _chunks(lines: list, window: int = 20, stride: int = 10):
         yield start + 1, end, "\n".join(lines[start:end])
 
 
-def _embed_lines(lines: list[str]) -> "np.ndarray | None":
+def _embed_line_window(
+    lines: list[str], window_start: int, window_end: int
+) -> "np.ndarray | None":
+    """Embed only the lines inside a candidate window.
+
+    The analyzer used to embed every line in the file before it knew which
+    windows would survive the sink/similarity/GBDT gates. On large files that
+    made refinement the dominant cost even when only one or two findings were
+    emitted. Keeping the contextual +/- REFINE_CONTEXT snippets but doing it
+    lazily gives the same refinement signal for accepted windows.
+    """
     snippets = []
-    for i in range(len(lines)):
+    lo = max(1, window_start)
+    hi = min(len(lines), window_end)
+    if lo > hi:
+        return None
+    for line_no in range(lo, hi + 1):
+        i = line_no - 1
         s = max(0, i - REFINE_CONTEXT)
         e = min(len(lines), i + REFINE_CONTEXT + 1)
         snippets.append("\n".join(lines[s:e]))
@@ -440,12 +477,9 @@ def _refine_range(
         e = min(window_end, sink_line + REFINE_SPAN)
         return s, e, 1.0, "sink_regex"
 
-    if line_vecs is not None:
-        lo = window_start - 1
-        hi = min(window_end, len(line_vecs))
-        if lo < hi:
-            window = line_vecs[lo:hi]
-            sims = (pattern_vecs @ window.T).max(axis=0)
+    if line_vecs is not None and len(line_vecs) > 0:
+        sims = (pattern_vecs @ line_vecs.T).max(axis=0)
+        if len(sims) > 0:
             peak_idx = int(sims.argmax())
             peak = float(sims[peak_idx])
             s = max(0, peak_idx - REFINE_SPAN)
@@ -456,6 +490,7 @@ def _refine_range(
 
 
 # ── Public entry point ──────────────────────────────────────────────────────
+
 
 def _classify_cwe(
     unit_vec: np.ndarray, index: "list[dict] | None"
@@ -473,44 +508,189 @@ def _classify_cwe(
     return best_entry, best_sim
 
 
-def _any_sink_hit(lines: list[str], win_start: int, win_end: int) -> Optional[tuple[str, int]]:
+def _metadata_for_cwe(cwe: str, index: "list[dict] | None") -> "dict | None":
+    if index:
+        for entry in index:
+            if entry["cwe"] == cwe:
+                return entry
+    meta = VULN_PATTERNS.get(cwe)
+    if meta is None:
+        return None
+    return {
+        "cwe": cwe,
+        "name": meta["name"],
+        "severity": meta["severity"],
+        "pattern_vecs": np.zeros((1, 768), dtype=np.float32),
+    }
+
+
+def _sink_cwe_order(language: str | None) -> tuple[str, ...]:
+    if language in ("javascript", "typescript"):
+        first = ("CWE-78", "CWE-94")
+        return first + tuple(cwe for cwe in SINK_REGEX if cwe not in first)
+    return tuple(SINK_REGEX.keys())
+
+
+def _any_sink_hit(
+    lines: list[str], win_start: int, win_end: int, language: str | None = None
+) -> Optional[tuple[str, int]]:
     """Return (cwe, line_no) of the first sink regex hit in the window,
     across every CWE we track — or None."""
-    for cwe in SINK_REGEX:
-        line_no = _find_sink_line(cwe, lines, win_start, win_end)
-        if line_no is not None:
-            return cwe, line_no
-    return None
+    hits = _sink_hits(lines, win_start, win_end, language)
+    return hits[0] if hits else None
 
 
-def _analyze_gbdt_first(
-    code: str, lang: str, gbdt, cwe_index: list[dict]
-) -> dict:
-    """Hybrid detection:
-      • a window is emitted if any CWE sink regex matches inside it
-        (ground truth — GBDT not consulted);
-      • otherwise the window must pass CWE_CLASSIFY_THRESHOLD on similarity
-        AND GBDT_GATE_THRESHOLD on the trained model."""
-    lines = code.splitlines()
-    if not lines:
-        return {"status": "ready", "language_detected": lang, "findings": [], "mode": "gbdt-first"}
+def _sink_hits(
+    lines: list[str], win_start: int, win_end: int, language: str | None = None
+) -> list[tuple[str, int]]:
+    """Return all distinct sink hits in language-aware CWE order.
 
-    line_vecs = _embed_lines(lines)
+    Some ambiguous names, such as JavaScript `exec(...)`, match more than
+    one CWE regex. Track line+span so the earlier language-specific CWE wins
+    for the same token while still allowing multiple different sinks in one
+    sliding window.
+    """
+    hits: list[tuple[str, int]] = []
+    seen_spans: set[tuple[int, int, int]] = set()
+    for cwe in _sink_cwe_order(language):
+        match = _find_sink_match(cwe, lines, win_start, win_end)
+        if match is None:
+            continue
+        line_no, (span_start, span_end) = match
+        span_key = (line_no, span_start, span_end)
+        if span_key in seen_spans:
+            continue
+        seen_spans.add(span_key)
+        hits.append((cwe, line_no))
+    return hits
 
-    windows: list[tuple[int, int, str]] = []
+
+def _partition_windows(
+    lines: list[str], language: str | None = None
+) -> tuple[
+    list[tuple[int, int, tuple[str, int]]],
+    list[tuple[int, int, str]],
+    list[str],
+]:
+    sink_windows: list[tuple[int, int, tuple[str, int]]] = []
+    semantic_windows: list[tuple[int, int, str]] = []
     chunks_list: list[str] = []
     for line_start, line_end, chunk in _chunks(lines):
+        sink_hits = _sink_hits(lines, line_start, line_end, language)
+        if sink_hits:
+            for sink_hit in sink_hits:
+                sink_windows.append((line_start, line_end, sink_hit))
+            continue
         if len(chunk.strip()) < 30:
             continue
-        windows.append((line_start, line_end, chunk))
+        semantic_windows.append((line_start, line_end, chunk))
         chunks_list.append(chunk)
+    return sink_windows, semantic_windows, chunks_list
+
+
+def _append_sink_findings(
+    findings: list[dict],
+    lines: list[str],
+    sink_windows: list[tuple[int, int, tuple[str, int]]],
+    cwe_index: "list[dict] | None",
+    last_reported: dict[str, int],
+) -> None:
+    """Append sink-regex findings without invoking CodeBERT or GBDT."""
+    for line_start, line_end, (cwe, _sink_line) in sink_windows:
+        best_entry = _metadata_for_cwe(cwe, cwe_index)
+        if best_entry is None:
+            continue
+
+        refined_start, refined_end, _peak, method = _refine_range(
+            None,
+            best_entry["pattern_vecs"],
+            line_start,
+            line_end,
+            cwe,
+            lines,
+        )
+        if refined_start - last_reported.get(cwe, -999) < MIN_LINES_BETWEEN_SAME_CWE:
+            continue
+
+        last_reported[cwe] = refined_start
+        snippet_lines = lines[refined_start - 1 : refined_end]
+        findings.append(
+            {
+                "rule_id": f"ML-{cwe.replace('-', '')}",
+                "message": (
+                    f"{best_entry.get('name', cwe)} "
+                    f"(gate=sink, cwe_sim=1.00, via {method})"
+                ),
+                "severity": best_entry.get("severity", "medium"),
+                "line_start": refined_start,
+                "line_end": refined_end,
+                "code_snippet": "\n".join(snippet_lines)[:400],
+                "confidence": 0.85,
+                "cwe": cwe,
+                "refined_by": method,
+                "gate": "sink",
+            }
+        )
+
+
+def _analyze_sink_only(code: str, lang: str) -> dict:
+    lines = code.splitlines()
+    sink_windows, _semantic_windows, _chunks_list = _partition_windows(lines, lang)
+    findings: list[dict] = []
+    _append_sink_findings(findings, lines, sink_windows, None, {})
+    return {
+        "status": "ready",
+        "language_detected": lang,
+        "findings": findings,
+        "mode": "sink-only",
+    }
+
+
+def _analyze_gbdt_first(code: str, lang: str, gbdt, cwe_index: list[dict]) -> dict:
+    """Hybrid detection:
+    • each distinct CWE sink regex match inside a window is emitted
+      (ground truth — GBDT not consulted);
+    • otherwise the window must pass CWE_CLASSIFY_THRESHOLD on similarity
+      AND GBDT_GATE_THRESHOLD on the trained model."""
+    lines = code.splitlines()
+    if not lines:
+        return {
+            "status": "ready",
+            "language_detected": lang,
+            "findings": [],
+            "mode": "gbdt-first",
+        }
+
+    sink_windows, semantic_windows, chunks_list = _partition_windows(lines, lang)
+
+    if not sink_windows and not chunks_list:
+        return {
+            "status": "ready",
+            "language_detected": lang,
+            "findings": [],
+            "mode": "gbdt-first",
+        }
+
+    findings: list[dict] = []
+    last_reported: dict[str, int] = {}
+    _append_sink_findings(findings, lines, sink_windows, cwe_index, last_reported)
 
     if not chunks_list:
-        return {"status": "ready", "language_detected": lang, "findings": [], "mode": "gbdt-first"}
+        return {
+            "status": "ready",
+            "language_detected": lang,
+            "findings": findings,
+            "mode": "hybrid-gbdt-first",
+        }
 
     embs = embedder.embed_batch(chunks_list)
     if embs is None or len(embs) == 0:
-        return {"status": "ready", "language_detected": lang, "findings": [], "mode": "gbdt-first"}
+        return {
+            "status": "ready",
+            "language_detected": lang,
+            "findings": findings,
+            "mode": "hybrid-gbdt-first",
+        }
     embs = np.asarray(embs, dtype=np.float32)
 
     try:
@@ -519,69 +699,51 @@ def _analyze_gbdt_first(
         logger.warning("GBDT predict failed, falling back: %s", e)
         return _analyze_legacy(code, lang)
 
-    findings = []
-    last_reported: dict[str, int] = {}
-
-    for (line_start, line_end, _chunk), emb, prob in zip(windows, embs, probs):
+    for (line_start, line_end, _chunk), emb, prob in zip(semantic_windows, embs, probs):
         prob = float(prob)
         norm = float(np.linalg.norm(emb))
         if norm == 0:
             continue
         unit_vec = emb / norm
 
-        sink_hit = _any_sink_hit(lines, line_start, line_end)
-        gate_reason: str
-
-        if sink_hit is not None:
-            cwe, _sink_line = sink_hit
-            best_entry = next(
-                (e for e in cwe_index if e["cwe"] == cwe),
-                VULN_PATTERNS.get(cwe) and {
-                    "cwe": cwe,
-                    "name": VULN_PATTERNS[cwe]["name"],
-                    "severity": VULN_PATTERNS[cwe]["severity"],
-                    # No pattern_vecs needed — sink regex drives the refine.
-                    "pattern_vecs": np.zeros((1, 768), dtype=np.float32),
-                },
-            )
-            if best_entry is None:
-                continue
-            cwe_sim = 1.0  # sink match is ground truth
-            gate_reason = "sink"
-        else:
-            best_entry, cwe_sim = _classify_cwe(unit_vec, cwe_index)
-            if best_entry is None or cwe_sim < CWE_CLASSIFY_THRESHOLD:
-                continue
-            if prob < GBDT_GATE_THRESHOLD:
-                continue
-            cwe = best_entry["cwe"]
-            gate_reason = "sim+gbdt"
-
-        if line_start - last_reported.get(cwe, -999) < MIN_LINES_BETWEEN_SAME_CWE:
+        best_entry, cwe_sim = _classify_cwe(unit_vec, cwe_index)
+        if best_entry is None or cwe_sim < CWE_CLASSIFY_THRESHOLD:
             continue
+        if prob < GBDT_GATE_THRESHOLD:
+            continue
+        cwe = best_entry["cwe"]
 
+        line_vecs = _embed_line_window(lines, line_start, line_end)
         refined_start, refined_end, _peak, method = _refine_range(
-            line_vecs, best_entry["pattern_vecs"],
-            line_start, line_end, cwe, lines,
+            line_vecs,
+            best_entry["pattern_vecs"],
+            line_start,
+            line_end,
+            cwe,
+            lines,
         )
+        if refined_start - last_reported.get(cwe, -999) < MIN_LINES_BETWEEN_SAME_CWE:
+            continue
 
         last_reported[cwe] = refined_start
         snippet_lines = lines[refined_start - 1 : refined_end]
-        findings.append({
-            "rule_id": f"ML-{cwe.replace('-', '')}",
-            "message": (
-                f"{best_entry.get('name', cwe)} "
-                f"(gate={gate_reason}, gbdt={prob:.2f}, cwe_sim={cwe_sim:.2f}, via {method})"
-            ),
-            "severity": best_entry.get("severity", "medium"),
-            "line_start": refined_start,
-            "line_end": refined_end,
-            "code_snippet": "\n".join(snippet_lines)[:400],
-            "confidence": round(prob if gate_reason != "sink" else max(prob, 0.75), 3),
-            "cwe": cwe,
-            "refined_by": method,
-            "gate": gate_reason,
-        })
+        findings.append(
+            {
+                "rule_id": f"ML-{cwe.replace('-', '')}",
+                "message": (
+                    f"{best_entry.get('name', cwe)} "
+                    f"(gate=sim+gbdt, gbdt={prob:.2f}, cwe_sim={cwe_sim:.2f}, via {method})"
+                ),
+                "severity": best_entry.get("severity", "medium"),
+                "line_start": refined_start,
+                "line_end": refined_end,
+                "code_snippet": "\n".join(snippet_lines)[:400],
+                "confidence": round(prob, 3),
+                "cwe": cwe,
+                "refined_by": method,
+                "gate": "sim+gbdt",
+            }
+        )
 
     return {
         "status": "ready",
@@ -594,23 +756,53 @@ def _analyze_gbdt_first(
 def _analyze_legacy(code: str, lang: str) -> dict:
     """Similarity-first detection — used as a fallback when the GBDT model
     is not yet trained. This was the previous default behaviour."""
+    lines = code.splitlines()
+    if not lines:
+        return {
+            "status": "ready",
+            "language_detected": lang,
+            "findings": [],
+            "mode": "similarity-first",
+        }
+
+    sink_windows, windows, chunks_list = _partition_windows(lines, lang)
+    findings: list[dict] = []
+    last_reported: dict[str, int] = {}
     index = _get_index()
     if not index:
+        _append_sink_findings(findings, lines, sink_windows, None, last_reported)
+        if findings:
+            return {
+                "status": "ready",
+                "language_detected": lang,
+                "findings": findings,
+                "mode": "similarity-first",
+            }
         return {"status": "loading", "language_detected": lang, "findings": []}
 
     threshold = THRESHOLD_HARDCODED
-    lines = code.splitlines()
-    line_vecs = _embed_lines(lines) if lines else None
-    findings = []
-    last_reported: dict[str, int] = {}
+    _append_sink_findings(findings, lines, sink_windows, index, last_reported)
 
-    for line_start, line_end, chunk in _chunks(lines):
-        if len(chunk.strip()) < 30:
-            continue
-        vec = embedder.embed(chunk)
-        if vec is None:
-            continue
-        norm = np.linalg.norm(vec)
+    if not chunks_list:
+        return {
+            "status": "ready",
+            "language_detected": lang,
+            "findings": findings,
+            "mode": "similarity-first",
+        }
+
+    embs = embedder.embed_batch(chunks_list)
+    if embs is None or len(embs) == 0:
+        return {
+            "status": "ready",
+            "language_detected": lang,
+            "findings": findings,
+            "mode": "similarity-first",
+        }
+    embs = np.asarray(embs, dtype=np.float32)
+
+    for (line_start, line_end, _chunk), vec in zip(windows, embs):
+        norm = float(np.linalg.norm(vec))
         if norm == 0:
             continue
         vec = vec / norm
@@ -620,26 +812,33 @@ def _analyze_legacy(code: str, lang: str) -> dict:
             continue
 
         cwe = best_entry["cwe"]
-        if line_start - last_reported.get(cwe, -999) < MIN_LINES_BETWEEN_SAME_CWE:
+        line_vecs = _embed_line_window(lines, line_start, line_end)
+        refined_start, refined_end, _peak, method = _refine_range(
+            line_vecs,
+            best_entry["pattern_vecs"],
+            line_start,
+            line_end,
+            cwe,
+            lines,
+        )
+        if refined_start - last_reported.get(cwe, -999) < MIN_LINES_BETWEEN_SAME_CWE:
             continue
 
-        refined_start, refined_end, _peak, method = _refine_range(
-            line_vecs, best_entry["pattern_vecs"],
-            line_start, line_end, cwe, lines,
-        )
         last_reported[cwe] = refined_start
         snippet_lines = lines[refined_start - 1 : refined_end]
-        findings.append({
-            "rule_id": f"ML-{cwe.replace('-', '')}",
-            "message": f"{best_entry['name']} (semantic match, sim={best_sim:.2f}, via {method})",
-            "severity": best_entry["severity"],
-            "line_start": refined_start,
-            "line_end": refined_end,
-            "code_snippet": "\n".join(snippet_lines)[:400],
-            "confidence": round(best_sim, 3),
-            "cwe": cwe,
-            "refined_by": method,
-        })
+        findings.append(
+            {
+                "rule_id": f"ML-{cwe.replace('-', '')}",
+                "message": f"{best_entry['name']} (semantic match, sim={best_sim:.2f}, via {method})",
+                "severity": best_entry["severity"],
+                "line_start": refined_start,
+                "line_end": refined_end,
+                "code_snippet": "\n".join(snippet_lines)[:400],
+                "confidence": round(best_sim, 3),
+                "cwe": cwe,
+                "refined_by": method,
+            }
+        )
 
     return {
         "status": "ready",
@@ -653,6 +852,9 @@ def analyze(code: str, language: Optional[str] = None) -> dict:
     lang = _detect_language(code, language)
 
     if not embedder.is_ready():
+        sink_only = _analyze_sink_only(code, lang)
+        if sink_only["findings"]:
+            return sink_only
         return {"status": embedder.status(), "language_detected": lang, "findings": []}
 
     gbdt = _load_gbdt()
@@ -662,6 +864,9 @@ def analyze(code: str, language: Optional[str] = None) -> dict:
 
     cwe_index = _get_cwe_index()
     if not cwe_index:
+        sink_only = _analyze_sink_only(code, lang)
+        if sink_only["findings"]:
+            return sink_only
         return {"status": "loading", "language_detected": lang, "findings": []}
 
     return _analyze_gbdt_first(code, lang, gbdt, cwe_index)

@@ -8,6 +8,8 @@ Endpoints:
   POST /predict          return confidence score for a feature vector
   POST /analyze          semantic analysis via CodeBERT (all languages)
   POST /semgrep          rule-based scan via semgrep community rules
+  POST /property_patterns structural correctness/security pattern checks
+  POST /audit_step       one LLM audit workflow step (OpenAI / Anthropic)
 
 Route handlers stay thin — heavy lifting lives in `services/`.
 """
@@ -17,14 +19,14 @@ import os
 import time
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import Any, Literal, Optional
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 
-from . import embedder, analyzer, semgrep_scanner
+from . import analyzer, embedder, property_patterns, semgrep_scanner
 from .flags import is_public_mode, setup_flags
 from .logging_config import reset_request_id, set_request_id, setup_logging
 from .services import training
@@ -187,23 +189,102 @@ def predict_batch(req: PredictBatchRequest):
     }
 
 
-class AnalyzeRequest(BaseModel):
+class CodeScanRequest(BaseModel):
     code: str
     language: Optional[str] = None
+
+
+SYSTEM_PROMPT_FALLBACK = (
+    "You are Makina Audit, a security review assistant for scanner output.\n"
+    "Use only the submitted code and findings unless the prompt explicitly asks for assumptions.\n"
+    "Separate confirmed evidence from hypotheses.\n"
+    "Do not claim a vulnerability is confirmed without a concrete source, path, and sink.\n"
+    "Return concise markdown with clear sections."
+)
+
+
+class AuditStepRequest(BaseModel):
+    provider: Literal["openai", "anthropic"]
+    api_key: str = Field(min_length=1)
+    model: str = Field(min_length=1)
+    max_output_tokens: int = Field(default=1400, ge=128, le=8000)
+    system_prompt: str = SYSTEM_PROMPT_FALLBACK
+    prompt: str = Field(min_length=1)
+
+
+class AuditStepResponse(BaseModel):
+    output: str
+
+
+def _extract_openai_text(response: Any) -> str:
+    text = getattr(response, "output_text", None)
+    if text:
+        return text
+    chunks: list[str] = []
+    for item in getattr(response, "output", []) or []:
+        for content in getattr(item, "content", []) or []:
+            if getattr(content, "type", None) == "output_text":
+                chunks.append(getattr(content, "text", ""))
+    return "\n".join(chunk for chunk in chunks if chunk).strip()
+
+
+def _extract_anthropic_text(response: Any) -> str:
+    chunks: list[str] = []
+    for block in getattr(response, "content", []) or []:
+        if getattr(block, "type", None) == "text":
+            chunks.append(getattr(block, "text", ""))
+    return "\n".join(chunk for chunk in chunks if chunk).strip()
+
+
+def _sanitize_audit_error(exc: Exception, api_key: str) -> str:
+    message = str(exc)
+    if api_key:
+        message = message.replace(api_key, "[redacted]")
+    return message or "provider request failed"
+
+
+@app.post("/audit_step")
+def audit_step(req: AuditStepRequest) -> AuditStepResponse:
+    """Run one request-scoped LLM audit step. API keys are never persisted."""
+    try:
+        if req.provider == "openai":
+            from openai import OpenAI
+
+            client = OpenAI(api_key=req.api_key)
+            response = client.responses.create(
+                model=req.model,
+                instructions=req.system_prompt,
+                input=req.prompt,
+                max_output_tokens=req.max_output_tokens,
+            )
+            output = _extract_openai_text(response)
+        else:
+            import anthropic
+
+            client = anthropic.Anthropic(api_key=req.api_key)
+            response = client.messages.create(
+                model=req.model,
+                max_tokens=req.max_output_tokens,
+                system=req.system_prompt,
+                messages=[{"role": "user", "content": req.prompt}],
+            )
+            output = _extract_anthropic_text(response)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=_sanitize_audit_error(exc, req.api_key),
+        ) from exc
+
+    return AuditStepResponse(output=output or "(no text output)")
 
 
 @app.post("/analyze")
-def analyze_code(req: AnalyzeRequest):
+def analyze_code(req: CodeScanRequest):
     return analyzer.analyze(req.code, req.language)
 
 
-class SemgrepRequest(BaseModel):
-    code: str
-    language: Optional[str] = None
-
-
 @app.post("/semgrep")
-def semgrep_scan(req: SemgrepRequest):
+def semgrep_scan(req: CodeScanRequest):
     return semgrep_scanner.scan(req.code, req.language or "auto")
 
 
@@ -221,20 +302,24 @@ def embed_batch(req: EmbedBatchRequest):
     return {"embeddings": embs.tolist()}
 
 
-class TaintRequest(BaseModel):
-    code: str
-    language: Optional[str] = None
-
-
 @app.post("/taint")
-def taint_scan(req: TaintRequest):
+def taint_scan(req: CodeScanRequest):
     from . import taint_engine
-    from .semgrep_scanner import _detect_language
 
-    language = req.language or "auto"
+    return taint_engine.analyze(req.code, _resolved_language(req.code, req.language))
+
+
+@app.post("/property_patterns")
+def property_pattern_scan(req: CodeScanRequest):
+    return property_patterns.analyze(
+        req.code, _resolved_language(req.code, req.language)
+    )
+
+
+def _resolved_language(code: str, language: str | None) -> str:
     if language in ("auto", "unknown", "", None):
-        language = _detect_language(req.code)
-    return taint_engine.analyze(req.code, language)
+        return semgrep_scanner._detect_language(code)
+    return language
 
 
 class EmbedWithGraphRequest(BaseModel):
@@ -260,6 +345,8 @@ def embed_with_graph(req: EmbedWithGraphRequest):
     lines = req.code.splitlines()
 
     snippets = []
+    snippet_indexes = []
+    seen_snippets: dict[str, int] = {}
     for line in req.line_starts:
         if functions:
             context = build_augmented_context(
@@ -269,12 +356,18 @@ def embed_with_graph(req: EmbedWithGraphRequest):
             ctx_s = max(0, line - 4)
             ctx_e = min(len(lines), line + 3)
             context = "\n".join(lines[ctx_s:ctx_e])
-        snippets.append(context)
+        snippet_idx = seen_snippets.get(context)
+        if snippet_idx is None:
+            snippet_idx = len(snippets)
+            seen_snippets[context] = snippet_idx
+            snippets.append(context)
+        snippet_indexes.append(snippet_idx)
 
     embs = embedder.embed_batch(snippets)
     if embs is None:
         return {"embeddings": []}
-    return {"embeddings": embs.tolist()}
+    unique_embeddings = embs.tolist()
+    return {"embeddings": [unique_embeddings[i] for i in snippet_indexes]}
 
 
 # ---------- entry point -------------------------------------------------------

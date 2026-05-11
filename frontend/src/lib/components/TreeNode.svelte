@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import type { FileNode } from '$lib/types';
 	import TreeNode from './TreeNode.svelte';
 
@@ -32,9 +33,8 @@
 		go: 'go', java: 'java', ruby: 'rb', c: 'c', cpp: 'cpp'
 	};
 
-	// depth is fixed at creation time — intentional snapshot
-	// eslint-disable-next-line svelte/state-referenced-locally
-	let open = $state(depth < 2);
+	const initiallyOpen = untrack(() => depth < 2);
+	let open = $state(initiallyOpen);
 
 	const isSelected = $derived(node.path === selectedPath);
 	const isScanned = $derived(scannedPaths.has(node.path));
