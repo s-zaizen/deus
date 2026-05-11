@@ -1,6 +1,7 @@
 pub mod models;
 
 use axum::{
+    extract::Extension,
     middleware,
     routing::{delete, get, post},
     Router,
@@ -8,7 +9,7 @@ use axum::{
 use std::net::SocketAddr;
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::features::{findings, knowledge, labels, model, scan, verify};
+use crate::features::{audit, findings, knowledge, labels, model, scan, verify};
 use crate::flags::Flags;
 use crate::logging::request_id_mw;
 
@@ -24,6 +25,7 @@ pub fn build_router(flags: Flags) -> Router {
     // Read-only routes — always exposed.
     let mut app = Router::new()
         .route("/api/scan", post(scan::scan))
+        .route("/api/audit/run", post(audit::run))
         .route("/api/stats", get(model::stats))
         .route("/api/verify/queue", get(verify::list))
         .route("/api/knowledge", get(knowledge::list))
@@ -40,7 +42,9 @@ pub fn build_router(flags: Flags) -> Router {
             .route("/api/retrain", post(model::retrain));
     }
 
-    app.layer(middleware::from_fn(request_id_mw)).layer(cors)
+    app.layer(middleware::from_fn(request_id_mw))
+        .layer(Extension(flags))
+        .layer(cors)
 }
 
 pub async fn serve(host: &str, port: u16) -> anyhow::Result<()> {

@@ -5,11 +5,13 @@
 	let {
 		cases,
 		onlabel,
-		onsubmit
+		onsubmit,
+		onclose
 	}: {
 		cases: VerifyCase[];
 		onlabel: (caseNo: number, findingId: string, label: Label) => void;
 		onsubmit: (caseNo: number) => Promise<void>;
+		onclose: (caseNo: number) => Promise<void>;
 	} = $props();
 
 	const langColor: Record<string, string> = {
@@ -66,6 +68,7 @@
 	// Per-case expand state and submitting state — collapsed by default
 	let expandedCases = $state<Record<number, boolean>>({});
 	let submittingCases = $state<Record<number, boolean>>({});
+	let closingCases = $state<Record<number, boolean>>({});
 
 	// Highlighted code cache: keyed by findingId. Populated lazily on expand.
 	let codeCache = $state<Record<string, string>>({});
@@ -100,6 +103,14 @@
 		}
 	}
 
+	async function handleClose(caseNo: number) {
+		closingCases[caseNo] = true;
+		try {
+			await onclose(caseNo);
+		} finally {
+			closingCases[caseNo] = false;
+		}
+	}
 
 </script>
 
@@ -176,6 +187,7 @@
 				{@const fpCount = Object.values(vc.labels).filter((l) => l === 'fp').length}
 				{@const expanded = isExpanded(vc.caseNo)}
 				{@const submitting = submittingCases[vc.caseNo] ?? false}
+				{@const closing = closingCases[vc.caseNo] ?? false}
 
 				<div class="rounded-xl border border-gray-800 bg-gray-900 overflow-hidden">
 					<!-- Header -->
@@ -296,18 +308,32 @@
 										&nbsp;·&nbsp;<span class="text-red-600">{fpCount} FP</span>
 									{/if}
 								</span>
-								<button
-									onclick={() => handleSubmit(vc.caseNo)}
-									disabled={submitting || labeledCount === 0}
-									class={[
-										'px-5 py-1.5 rounded text-sm font-semibold transition-colors',
-										submitting || labeledCount === 0
-											? 'bg-gray-800 text-gray-600 cursor-not-allowed'
-											: 'bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer'
-									].join(' ')}
-								>
-									{submitting ? 'Submitting…' : 'Submit to Knowledge'}
-								</button>
+								<div class="flex items-center gap-2">
+									<button
+										onclick={() => handleClose(vc.caseNo)}
+										disabled={closing || submitting}
+										class={[
+											'px-4 py-1.5 rounded border text-sm font-semibold transition-colors',
+											closing || submitting
+												? 'border-gray-800 bg-gray-800 text-gray-600 cursor-not-allowed'
+												: 'border-gray-700 bg-gray-900 text-gray-400 hover:border-gray-600 hover:text-gray-200 cursor-pointer'
+										].join(' ')}
+									>
+										{closing ? 'Closing…' : 'Close Case'}
+									</button>
+									<button
+										onclick={() => handleSubmit(vc.caseNo)}
+										disabled={submitting || closing || labeledCount === 0}
+										class={[
+											'px-5 py-1.5 rounded text-sm font-semibold transition-colors',
+											submitting || closing || labeledCount === 0
+												? 'bg-gray-800 text-gray-600 cursor-not-allowed'
+												: 'bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer'
+										].join(' ')}
+									>
+										{submitting ? 'Submitting…' : 'Submit to Knowledge'}
+									</button>
+								</div>
 							</div>
 						</div>
 					{/if}

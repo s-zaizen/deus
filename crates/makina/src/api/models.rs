@@ -148,6 +148,65 @@ pub struct SubmitKnowledgeRequest {
     pub labels: HashMap<String, Label>,
 }
 
+// ── LLM audit ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum AuditProvider {
+    Openai,
+    Anthropic,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AuditStepRunRequest {
+    pub provider: AuditProvider,
+    pub api_key: String,
+    pub model: String,
+    pub max_output_tokens: u32,
+    pub system_prompt: String,
+    pub prompt: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuditStepRunResponse {
+    pub output: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AuditRunRequest {
+    pub provider: AuditProvider,
+    pub api_key: String,
+    pub model: String,
+    pub max_output_tokens: u32,
+    pub scan_id: Option<String>,
+    pub code: String,
+    pub language: Language,
+    pub findings: Vec<Finding>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AuditStepStatus {
+    Complete,
+    Error,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuditWorkflowResult {
+    pub id: String,
+    pub title: String,
+    pub status: AuditStepStatus,
+    pub output: String,
+    pub error: Option<String>,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuditRunResponse {
+    pub results: Vec<AuditWorkflowResult>,
+    pub report_markdown: String,
+}
+
 /// Shared `?skip_train=true` query — used by Knowledge submit and
 /// Verify queue removal so the bulk-import path can defer retraining
 /// to a single trailing `/api/retrain` call.

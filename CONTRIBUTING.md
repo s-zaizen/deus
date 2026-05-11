@@ -6,7 +6,8 @@
 
 ```bash
 # Activate git hooks (one-time per clone)
-git config core.hooksPath .claude/hooks
+git config core.hooksPath .codex/hooks   # Codex/git hook bundle
+# or: git config core.hooksPath .claude/hooks
 
 # Start all services
 docker compose up -d
@@ -19,6 +20,38 @@ docker compose up -d --build backend   # Rust API
 docker compose up -d --build ml        # Python ML
 docker compose up -d --build frontend  # SvelteKit UI
 ```
+
+Frontend dependency hygiene:
+
+```bash
+cd frontend
+npm audit --audit-level=low
+```
+
+The frontend keeps Vitest on 3.x so test tooling reuses the root Vite
+6.x line instead of pulling an older nested Vite. `package.json` also
+overrides SvelteKit's transitive `cookie` dependency to `0.7.2` because
+current SvelteKit 2.x still declares `cookie ^0.6.0`. Monaco should stay
+on the `monaco-editor/esm/vs/editor/editor.api` import path with the
+manual chunks in `vite.config.ts`; importing `monaco-editor` directly
+rebuilds it as one large production chunk.
+
+Audit LLM integration is initiated by the static frontend, but the fixed
+workflow, prompt assembly, and final Markdown report contract live in the
+Rust backend. Provider calls run through the ML service with the official
+Python `openai` and `anthropic` packages. Do not commit API keys or add
+server-side key persistence; the Audit UI may keep keys in memory or, at
+the user's explicit choice, browser `localStorage`. The final report must
+map scanner findings one-to-one to `MAKINA-001`, `MAKINA-002`, etc.; keep
+that contract backend-owned.
+
+Scanner detector changes must preserve the language-agnostic pipeline
+shape: semgrep, CodeBERT semantic analysis, taint analysis, and structural
+property-pattern checks all contribute evidence before Rust merges and
+deduplicates findings. New property-pattern detectors should avoid
+project-specific API names as their only signal and should include focused
+tests that cover a real trigger, a generalized trigger, and a quiet
+sanitized/non-sink case.
 
 ## CVEfixes Import & Training
 
@@ -166,11 +199,12 @@ crates/makina/src/   Rust core — hexagonal + vertical-slice
 ml/makina_ml/        Python ML service (FastAPI)
   server.py          thin route handlers
   services/          use cases (training.py = GBDT pipeline)
-  analyzer.py / embedder.py / taint_engine.py / call_graph.py …
-                     domain modules (CodeBERT, taint, call graph, features)
+  analyzer.py / embedder.py / taint_engine.py / property_patterns/ / call_graph.py …
+                     domain modules (CodeBERT, taint, structural patterns, call graph, features)
 frontend/src/        SvelteKit UI (Svelte 5 Runes)
   routes/            +page.svelte (state + layout coordinator)
-  lib/components/    Scan / Verify / Knowledge / Model tab components
+  lib/components/    Scan / Audit / Verify / Knowledge / Model tab components
+  lib/audit.ts       Audit run client over /api/audit/run
   lib/api.ts         fetch wrappers (PUBLIC_API_URL)
   lib/placeholders.ts  per-language sample snippets for the Scan tab
 docs/                Architecture and design documentation
@@ -179,6 +213,12 @@ docs/                Architecture and design documentation
   hooks/             typecheck.sh (PostToolUse), pre-push (git), prepush-gate.sh (PreToolUse)
   rules/             Path-scoped lint/style rules (backend, ml, frontend)
   settings.json      Hook configuration
+AGENTS.md            Codex instructions for this repo
+.codex/              Codex configuration and playbooks
+  commands/          Vulnerability queue / verification workflows
+  checks/            Explicit post-edit check helpers
+  hooks/             Git pre-push hook for the full suite
+  rules/             Path-scoped lint/style rules (backend, ml, frontend)
 ```
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for a full system overview.
@@ -198,7 +238,13 @@ Runtime flags are read once at startup. Today there is one flag,
 Public mode strips every learning-loop write: `/api/feedback`,
 `/api/findings/manual`, `POST /api/verify/queue`, `DELETE /api/verify/queue/:case_no`,
 `POST /api/knowledge`, `/api/retrain`, and the Python `/train`. The
-frontend hides the Verify and Model tabs.
+frontend hides the Verify and Model tabs. `/api/scan` remains available
+and still applies the baked model, but it skips writing unlabeled
+findings into `feedback.db`.
+
+For large scans, `MAKINA_EMBED_BATCH_SIZE` controls Python CodeBERT
+batching (default `32`). Lower it when running on memory-constrained
+hosts; raise it only after checking ML container memory headroom.
 
 When the flag set grows beyond a couple of toggles, swap the Python
 in-memory provider for a remote OpenFeature provider (Flipt, Unleash,
@@ -236,6 +282,7 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 | `ml`         | Python ML service          |
 | `frontend`   | SvelteKit app              |
 | `.claude`    | Claude Code slash commands |
+| `.codex`     | Codex instructions, rules, and playbooks |
 | `api`        | HTTP API contract changes  |
 | `verify`     | Verify queue / labeling    |
 | `scan`       | Scan pipeline              |
@@ -303,9 +350,11 @@ End-to-end: `docker compose up -d`, then use `/vuln-add` in Claude Code
 to queue a case. For ad-hoc smoke testing, the routes most worth
 hitting are `/api/scan`, `/api/stats`, and `/api/knowledge`.
 
-Automatic checks run at two points:
+Automatic checks run at these points:
 
 - **Edit/Write** — `.claude/hooks/typecheck.sh` (PostToolUse): `cargo clippy`, `ruff check`, `npm run check`
 - **Push** — `.claude/hooks/pre-push` (git hook + PreToolUse gate): clippy + `cargo test` + ruff + npm check + `npm test` + pytest (in container if running)
+- **Codex post-edit** — `.codex/checks/check-path.sh <changed-file> [...]`: run the path-scoped check explicitly after edits
+- **Codex push** — `.codex/hooks/pre-push`: same full pre-push suite as the Claude git hook
 
-Language-specific style rules are in `.claude/rules/`.
+Language-specific style rules are in `.claude/rules/` and `.codex/rules/`.
