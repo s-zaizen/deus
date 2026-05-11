@@ -5,8 +5,9 @@
 //! axis that matters is "public deployment vs developer dogfood":
 //!
 //! * **public mode** (`MAKINA_PUBLIC_MODE=true`) — read-only demo. The
-//!   model is fixed, so every endpoint that mutates labels or triggers
-//!   retraining is removed from the router and returns 404.
+//!   model is fixed, so every endpoint that mutates labels, triggers
+//!   retraining, or forwards request-scoped LLM provider secrets is
+//!   removed from the router and returns 404.
 //! * **dev mode** (default) — full Verify → train loop is wired up.
 //!
 //! We picked a hand-rolled struct over the OpenFeature Rust SDK because
@@ -18,7 +19,8 @@
 pub struct Flags {
     /// True when the deployment is publicly visible and must not accept
     /// learning-loop writes (feedback, manual findings, verify queue
-    /// submit, knowledge submit, retrain).
+    /// submit, knowledge submit, retrain) or hosted LLM audit calls that
+    /// would receive user provider API keys.
     pub public_mode: bool,
 }
 

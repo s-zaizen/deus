@@ -237,10 +237,13 @@ Runtime flags are read once at startup. Today there is one flag,
 
 Public mode strips every learning-loop write: `/api/feedback`,
 `/api/findings/manual`, `POST /api/verify/queue`, `DELETE /api/verify/queue/:case_no`,
-`POST /api/knowledge`, `/api/retrain`, and the Python `/train`. The
-frontend hides the Verify and Model tabs. `/api/scan` remains available
-and still applies the baked model, but it skips writing unlabeled
-findings into `feedback.db`.
+`POST /api/knowledge`, `/api/retrain`, and the Python `/train`. It also
+strips hosted Audit execution (`POST /api/audit/run`) so public users
+cannot accidentally send OpenAI or Anthropic API keys to the makina.sh
+backend. The frontend must show disabled-state notices for Verify and
+Audit when `PUBLIC_MAKINA_PUBLIC_MODE` is enabled. `/api/scan` remains
+available and still applies the baked model, but it skips writing
+unlabeled findings into `feedback.db`.
 
 For large scans, `MAKINA_EMBED_BATCH_SIZE` controls Python CodeBERT
 batching (default `32`). Lower it when running on memory-constrained

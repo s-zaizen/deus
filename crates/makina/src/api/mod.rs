@@ -14,8 +14,9 @@ use crate::flags::Flags;
 use crate::logging::request_id_mw;
 
 /// Build the application router with the supplied feature flags. Public
-/// mode strips every route that mutates the learning corpus — the model
-/// is fixed in that deployment, so writes have nothing to update.
+/// mode strips every route that mutates the learning corpus or forwards
+/// user-supplied secrets — the model is fixed in that deployment, and
+/// hosted LLM audit would require users to send provider API keys to us.
 pub fn build_router(flags: Flags) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -25,7 +26,6 @@ pub fn build_router(flags: Flags) -> Router {
     // Read-only routes — always exposed.
     let mut app = Router::new()
         .route("/api/scan", post(scan::scan))
-        .route("/api/audit/run", post(audit::run))
         .route("/api/stats", get(model::stats))
         .route("/api/verify/queue", get(verify::list))
         .route("/api/knowledge", get(knowledge::list))
@@ -34,6 +34,7 @@ pub fn build_router(flags: Flags) -> Router {
     if !flags.public_mode {
         // Learning-loop write routes — only in dev / private deployments.
         app = app
+            .route("/api/audit/run", post(audit::run))
             .route("/api/feedback", post(labels::record))
             .route("/api/findings/manual", post(findings::manual))
             .route("/api/verify/queue", post(verify::add))
@@ -50,7 +51,7 @@ pub fn build_router(flags: Flags) -> Router {
 pub async fn serve(host: &str, port: u16) -> anyhow::Result<()> {
     let flags = Flags::from_env();
     if flags.public_mode {
-        tracing::info!("public mode: learning-loop write routes are disabled");
+        tracing::info!("public mode: learning-loop writes and hosted audit are disabled");
     }
     let app = build_router(flags);
 
@@ -101,6 +102,12 @@ mod tests {
             status_for(flags, "POST", "/api/findings/manual").await,
             StatusCode::NOT_FOUND,
         );
+        // POST /api/audit/run — absent because it would forward
+        // request-scoped provider secrets to the hosted backend.
+        assert_eq!(
+            status_for(flags, "POST", "/api/audit/run").await,
+            StatusCode::NOT_FOUND,
+        );
         // POST /api/verify/queue — GET is wired, POST must be absent
         // (axum returns 405 because the path matches a different method).
         assert_eq!(
@@ -136,6 +143,13 @@ mod tests {
             status,
             StatusCode::NOT_FOUND,
             "feedback route must be registered in dev mode (got {status})"
+        );
+
+        let audit_status = status_for(flags, "POST", "/api/audit/run").await;
+        assert_ne!(
+            audit_status,
+            StatusCode::NOT_FOUND,
+            "audit route must be registered in dev mode (got {audit_status})"
         );
     }
 }
