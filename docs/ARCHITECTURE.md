@@ -138,9 +138,11 @@ ephemeral — there is no persistent volume, so `feedback.db` /
 `knowledge.db` / `model.json` reset on every revision. Public mode
 (the default for this deployment) disables every learning-loop write
 endpoint, so the lack of persistence is by design: the model ships as
-a frozen artefact baked into the image. `/api/scan` still runs the
-detectors and frozen-model scoring in public mode, but it does not
-persist unlabeled findings to `feedback.db`.
+a frozen artefact baked into the image. It also disables hosted LLM
+Audit execution so public users cannot send OpenAI or Anthropic API
+keys to the makina.sh backend. `/api/scan` still runs the detectors and
+frozen-model scoring in public mode, but it does not persist unlabeled
+findings to `feedback.db`.
 
 ## Scan Pipeline
 
@@ -227,14 +229,16 @@ Reference papers: ReAct (Yao et al., 2022), Reflexion (Shinn et al.,
 Provider calls use official Python SDKs in the ML service: `openai` for
 OpenAI Responses API calls and `anthropic` for Anthropic Messages API
 calls. Rust forwards only a single request-scoped provider call at a time
-to ML `/audit_step` and never persists the API key. The report generation
-step gets at least 4000 output tokens because it must cover every
-finding. If the provider returns no final report text after successful
-triage/trace steps, Rust falls back to a deterministic per-finding
-Markdown report derived from scanner evidence. The response includes both
-raw step results and `report_markdown` for the final report viewer. The
-UI keeps keys in memory unless the user chooses to remember them in
-browser `localStorage`.
+to ML `/audit_step` and never persists the API key. In public mode,
+`/api/audit/run` is not registered at all; the public frontend shows a
+disabled-state notice instead of collecting provider keys. The report
+generation step gets at least 4000 output tokens because it must cover
+every finding. If the provider returns no final report text after
+successful triage/trace steps, Rust falls back to a deterministic
+per-finding Markdown report derived from scanner evidence. The response
+includes both raw step results and `report_markdown` for the final report
+viewer. The private/dev UI keeps keys in memory unless the user chooses
+to remember them in browser `localStorage`.
 
 ### ML analysis gate (hybrid, GBDT-first)
 

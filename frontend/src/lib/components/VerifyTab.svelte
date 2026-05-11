@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { highlightSnippet } from '$lib/highlighter';
+	import { PUBLIC_MODE } from '$lib/flags';
 	import type { Label, VerifyCase } from '$lib/types';
 
 	let {
@@ -114,7 +115,25 @@
 
 </script>
 
-{#if cases.length === 0}
+{#if PUBLIC_MODE}
+	<div class="flex-1 flex items-center justify-center bg-gray-950/70">
+		<div class="max-w-md px-6 text-center">
+			<div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-xl border border-amber-900/70 bg-amber-950/25">
+				<svg class="h-7 w-7 text-amber-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+					<path stroke-linecap="round" stroke-linejoin="round"
+						d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
+				</svg>
+			</div>
+			<p class="text-sm font-semibold text-gray-300">Verify is disabled in public demo mode</p>
+			<p class="mt-2 text-sm leading-relaxed text-gray-500">
+				makina.sh runs a frozen read-only model. TP/FP labels, case closing, and Knowledge submission are disabled so public traffic cannot modify training data.
+			</p>
+			<p class="mt-3 text-xs leading-relaxed text-gray-600">
+				Run Makina locally or in a private deployment to use the continuous learning workflow.
+			</p>
+		</div>
+	</div>
+{:else if cases.length === 0}
 	<div class="flex-1 flex items-center justify-center bg-gray-950/70">
 		<div class="text-center max-w-sm px-4">
 			<div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-gray-800/40 border border-dashed border-gray-700/60 flex items-center justify-center">

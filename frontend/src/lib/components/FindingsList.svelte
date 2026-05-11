@@ -1,5 +1,6 @@
 <script lang="ts">
 	import FindingCard from '$lib/components/FindingCard.svelte';
+	import { PUBLIC_MODE } from '$lib/flags';
 	import type { Finding, Label, Language } from '$lib/types';
 
 	let {
@@ -51,6 +52,12 @@
 		</div>
 	{/if}
 
+	{#if PUBLIC_MODE && findings.length > 0}
+		<div class="rounded-lg border border-amber-900/70 bg-amber-950/20 p-3 text-xs leading-relaxed text-amber-100/80">
+			Public demo mode is read-only. TP/FP labels and case closing are disabled.
+		</div>
+	{/if}
+
 	{#if findings.length === 0 && !error}
 		<div class="flex flex-col items-center justify-center gap-3 py-10 text-center" aria-live="polite">
 			<div class="flex h-12 w-12 items-center justify-center rounded-xl border border-dashed border-gray-700/60 bg-gray-900">
@@ -81,7 +88,7 @@
 				{onclose}
 				onfocus={() => onfocus(finding.id)}
 				focused={finding.id === focusedFindingId}
-				readonly={resultsStale}
+				readonly={resultsStale || PUBLIC_MODE}
 			/>
 		</div>
 	{/each}

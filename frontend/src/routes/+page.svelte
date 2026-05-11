@@ -27,12 +27,7 @@
 
 	type Tab = 'scan' | 'audit' | 'verify' | 'knowledge' | 'model';
 
-	// Verify is hidden in public deployments (model is frozen, so Submit
-	// has no effect). Scan / Knowledge / Model stay visible — Model is
-	// read-only metrics, useful for showcasing how the GBDT looks.
-	const VISIBLE_TABS: readonly Tab[] = PUBLIC_MODE
-		? (['scan', 'audit', 'knowledge', 'model'] as const)
-		: (['scan', 'audit', 'verify', 'knowledge', 'model'] as const);
+	const VISIBLE_TABS: readonly Tab[] = ['scan', 'audit', 'verify', 'knowledge', 'model'] as const;
 
 	const TAB_DESCRIPTIONS: Record<Tab, string> = {
 		scan: 'Scan code for vulnerabilities',
@@ -388,7 +383,7 @@
 								<path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
 							</svg>
 						{/if}
-						{#if tab === 'verify' && verifyCases.length > 0}
+						{#if tab === 'verify' && verifyCases.length > 0 && !PUBLIC_MODE}
 							<span class="absolute -top-1 -right-1.5 w-4 h-4 text-[10px] font-bold bg-indigo-500 text-white rounded-full flex items-center justify-center">
 								{verifyCases.length}
 							</span>

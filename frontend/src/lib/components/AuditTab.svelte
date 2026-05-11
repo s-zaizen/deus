@@ -8,6 +8,7 @@
 	} from '$lib/audit';
 	import type { AuditCase, AuditProvider, AuditStepResult, AuditStepStatus, Finding } from '$lib/types';
 	import MarkdownReport from '$lib/components/MarkdownReport.svelte';
+	import { PUBLIC_MODE } from '$lib/flags';
 
 	let { auditCase }: { auditCase: AuditCase | null } = $props();
 
@@ -45,16 +46,19 @@
 	let selectedFindingId = $state<string | null>(null);
 	let lastAuditFindingIds = $state<string[]>([]);
 
-	const currentApiKey = $derived(provider === 'openai' ? openaiKey : anthropicKey);
+	const currentApiKey = $derived(PUBLIC_MODE ? '' : provider === 'openai' ? openaiKey : anthropicKey);
 	const currentModel = $derived(models[provider]);
 	const selectedFinding = $derived(
 		auditCase?.findings.find((finding) => finding.id === selectedFindingId) ?? null
 	);
 	const currentRunFindings = $derived(auditCase ? (selectedFinding ? [selectedFinding] : auditCase.findings) : []);
 	const canRunAll = $derived(
+		!PUBLIC_MODE &&
 		Boolean(auditCase && currentApiKey.trim() && currentModel.trim() && !running && auditCase.findings.length > 0)
 	);
-	const canRunSelected = $derived(Boolean(selectedFinding && currentApiKey.trim() && currentModel.trim() && !running));
+	const canRunSelected = $derived(
+		!PUBLIC_MODE && Boolean(selectedFinding && currentApiKey.trim() && currentModel.trim() && !running)
+	);
 	const canRun = $derived(selectedFinding ? canRunSelected : canRunAll);
 	const findingSummary = $derived(
 		auditCase
@@ -150,6 +154,13 @@
 	);
 
 	onMount(() => {
+		if (PUBLIC_MODE) {
+			openaiKey = '';
+			anthropicKey = '';
+			rememberKeys = false;
+			mounted = true;
+			return;
+		}
 		try {
 			const raw = localStorage.getItem(SETTINGS_KEY);
 			if (raw) {
@@ -176,7 +187,7 @@
 	});
 
 	$effect(() => {
-		if (!mounted) return;
+		if (!mounted || PUBLIC_MODE) return;
 		const stored: StoredSettings = {
 			provider,
 			models,
@@ -205,6 +216,10 @@
 
 	async function runAudit(scope: 'current' | 'all' = 'current') {
 		if (!auditCase) return;
+		if (PUBLIC_MODE) {
+			runError = 'LLM Audit is disabled in public demo mode.';
+			return;
+		}
 
 		const findings = scope === 'all' ? auditCase.findings : currentRunFindings;
 		if (findings.length === 0) return;
@@ -347,68 +362,77 @@
 		</div>
 
 		<div class="flex-1 overflow-y-auto p-4 space-y-5">
-			<!-- Provider toggle -->
-			<div class="grid grid-cols-2 gap-1 rounded-lg border border-gray-800 bg-gray-900 p-1">
-				{#each PROVIDERS as item}
-					<button
-						onclick={() => (provider = item.value)}
-						class={[
-							'relative z-0 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors',
-							provider === item.value
-								? 'bg-indigo-600 text-white'
-								: 'text-gray-500 hover:bg-gray-800 hover:text-gray-300 cursor-pointer'
-						].join(' ')}
-					>
-						{item.label}
-					</button>
-				{/each}
-			</div>
+			{#if PUBLIC_MODE}
+				<section class="rounded-lg border border-amber-900/70 bg-amber-950/20 p-3">
+					<p class="text-[10px] font-bold uppercase tracking-widest text-amber-300">Public demo mode</p>
+					<p class="mt-2 text-xs leading-relaxed text-amber-100/80">
+						LLM Audit is disabled on makina.sh because provider API keys would be forwarded to the hosted backend. Run Makina locally or in a private deployment to use OpenAI or Anthropic.
+					</p>
+				</section>
+			{:else}
+				<!-- Provider toggle -->
+				<div class="grid grid-cols-2 gap-1 rounded-lg border border-gray-800 bg-gray-900 p-1">
+					{#each PROVIDERS as item}
+						<button
+							onclick={() => (provider = item.value)}
+							class={[
+								'relative z-0 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors',
+								provider === item.value
+									? 'bg-indigo-600 text-white'
+									: 'text-gray-500 hover:bg-gray-800 hover:text-gray-300 cursor-pointer'
+							].join(' ')}
+						>
+							{item.label}
+						</button>
+					{/each}
+				</div>
 
-			<section class="space-y-3">
-				<label class="block space-y-1">
-					<span class="text-[10px] font-bold uppercase tracking-wider text-gray-600">API Key</span>
-					<input
-						type="password"
-						value={currentApiKey}
-						oninput={(e) => {
-							if (provider === 'openai') openaiKey = e.currentTarget.value;
-							else anthropicKey = e.currentTarget.value;
-						}}
-						placeholder={provider === 'openai' ? 'sk-...' : 'sk-ant-...'}
-						class="w-full rounded-md border border-gray-800 bg-gray-900 px-3 py-2 text-xs text-gray-200 placeholder-gray-700 focus:border-indigo-600/70 focus:outline-none"
-					/>
-				</label>
+				<section class="space-y-3">
+					<label class="block space-y-1">
+						<span class="text-[10px] font-bold uppercase tracking-wider text-gray-600">API Key</span>
+						<input
+							type="password"
+							value={currentApiKey}
+							oninput={(e) => {
+								if (provider === 'openai') openaiKey = e.currentTarget.value;
+								else anthropicKey = e.currentTarget.value;
+							}}
+							placeholder={provider === 'openai' ? 'sk-...' : 'sk-ant-...'}
+							class="w-full rounded-md border border-gray-800 bg-gray-900 px-3 py-2 text-xs text-gray-200 placeholder-gray-700 focus:border-indigo-600/70 focus:outline-none"
+						/>
+					</label>
 
-				<label class="flex items-center gap-2 text-xs text-gray-500">
-					<input
-						type="checkbox"
-						bind:checked={rememberKeys}
-						class="h-3.5 w-3.5 rounded border-gray-700 bg-gray-900 accent-indigo-600"
-					/>
-					<span>Remember key in this browser</span>
-				</label>
+					<label class="flex items-center gap-2 text-xs text-gray-500">
+						<input
+							type="checkbox"
+							bind:checked={rememberKeys}
+							class="h-3.5 w-3.5 rounded border-gray-700 bg-gray-900 accent-indigo-600"
+						/>
+						<span>Remember key in this browser</span>
+					</label>
 
-				<label class="block space-y-1">
-					<span class="text-[10px] font-bold uppercase tracking-wider text-gray-600">Model</span>
-					<input
-						type="text"
-						value={currentModel}
-						oninput={(e) => setModel(e.currentTarget.value)}
-						class="w-full rounded-md border border-gray-800 bg-gray-900 px-3 py-2 font-mono text-xs text-gray-200 focus:border-indigo-600/70 focus:outline-none"
-					/>
-				</label>
+					<label class="block space-y-1">
+						<span class="text-[10px] font-bold uppercase tracking-wider text-gray-600">Model</span>
+						<input
+							type="text"
+							value={currentModel}
+							oninput={(e) => setModel(e.currentTarget.value)}
+							class="w-full rounded-md border border-gray-800 bg-gray-900 px-3 py-2 font-mono text-xs text-gray-200 focus:border-indigo-600/70 focus:outline-none"
+						/>
+					</label>
 
-				<label class="block space-y-1">
-					<span class="text-[10px] font-bold uppercase tracking-wider text-gray-600">Max Output Tokens</span>
-					<input
-						type="number"
-						min="256"
-						max="8000"
-						bind:value={maxOutputTokens}
-						class="w-full rounded-md border border-gray-800 bg-gray-900 px-3 py-2 font-mono text-xs text-gray-200 focus:border-indigo-600/70 focus:outline-none"
-					/>
-				</label>
-			</section>
+					<label class="block space-y-1">
+						<span class="text-[10px] font-bold uppercase tracking-wider text-gray-600">Max Output Tokens</span>
+						<input
+							type="number"
+							min="256"
+							max="8000"
+							bind:value={maxOutputTokens}
+							class="w-full rounded-md border border-gray-800 bg-gray-900 px-3 py-2 font-mono text-xs text-gray-200 focus:border-indigo-600/70 focus:outline-none"
+						/>
+					</label>
+				</section>
+			{/if}
 		</div>
 	</aside>
 
@@ -475,6 +499,13 @@
 				</button>
 			</div>
 		</div>
+
+		{#if PUBLIC_MODE}
+			<div class="border-b border-amber-900/50 bg-amber-950/10 px-4 py-3 text-xs leading-relaxed text-amber-100/80">
+				<span class="font-semibold text-amber-300">Public demo:</span>
+				Hosted LLM Audit is unavailable because API keys must not be sent to this deployment.
+			</div>
+		{/if}
 
 		{#if !auditCase}
 			<div class="flex flex-1 items-center justify-center px-6 text-center">

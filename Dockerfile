@@ -166,10 +166,10 @@ ARG MAKINA_MODEL_VERSION=v1.0.8
 COPY models/${MAKINA_MODEL_VERSION}/model.json /root/.makina/model.json
 COPY models/${MAKINA_MODEL_VERSION}/metrics.json /root/.makina/metrics.json
 
-# Knowledge showcase — public mode disables the live Verify Submit
-# write path, so we materialise knowledge.db here at image build time
-# from the same samples.jsonl we trained on. Binary DBs aren't checked
-# into git; only the text source is.
+# Knowledge showcase — public mode disables live Verify Submit and
+# hosted Audit execution, so we materialise knowledge.db here at image
+# build time from the same samples.jsonl we trained on. Binary DBs
+# aren't checked into git; only the text source is.
 COPY models/${MAKINA_MODEL_VERSION}/samples.jsonl /tmp/samples.jsonl
 COPY ml/scripts/seed_knowledge.py /tmp/seed_knowledge.py
 RUN python3 /tmp/seed_knowledge.py \
