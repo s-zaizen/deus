@@ -555,6 +555,8 @@ makina/
 │           ├── types.ts   shared TypeScript types
 │           ├── folder.ts  folder drag-and-drop utilities
 │           └── placeholders.ts  per-language sample snippets for the Scan tab
+├── samples/vulnerable-code/
+│                         Intentionally vulnerable local scanner fixtures
 ├── third_party/           External assets (not vendored)
 │   └── datasets/          Training datasets (fetched via per-dir fetch.sh)
 │       └── cvefixes/      CVEfixes — CC BY 4.0, see README.md

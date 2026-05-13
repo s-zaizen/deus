@@ -207,6 +207,8 @@ frontend/src/        SvelteKit UI (Svelte 5 Runes)
   lib/audit.ts       Audit run client over /api/audit/run
   lib/api.ts         fetch wrappers (PUBLIC_API_URL)
   lib/placeholders.ts  per-language sample snippets for the Scan tab
+samples/vulnerable-code/
+                     Intentionally vulnerable local scanner fixtures
 docs/                Architecture and design documentation
 .claude/             Claude Code configuration
   commands/          Slash commands — vuln-add, vuln-verify, vuln-add-verify-with-claude
