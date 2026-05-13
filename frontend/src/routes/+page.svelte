@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { SvelteSet } from 'svelte/reactivity';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import AuditTab from '$lib/components/AuditTab.svelte';
 	import CodeEditor from '$lib/components/CodeEditor.svelte';
 	import FindingsList from '$lib/components/FindingsList.svelte';
@@ -59,6 +59,8 @@
 	let folderRoot = $state<FileNode | null>(null);
 	let selectedFile = $state<FileNode | null>(null);
 	let scannedPaths = new SvelteSet<string>();
+	let scannedFindingsByPath = new SvelteMap<string, Finding[]>();
+	let scanIdsByPath = new SvelteMap<string, string>();
 	let scanProgress = $state<{ current: number; total: number } | null>(null);
 	let explorerDragging = $state(false);
 
@@ -162,6 +164,11 @@
 			findings = result.findings;
 			currentScanId = result.scan_id;
 			scanCompleted = true;
+			if (selectedFile?.path) {
+				scannedFindingsByPath.set(selectedFile.path, result.findings);
+				scanIdsByPath.set(selectedFile.path, result.scan_id);
+				scannedPaths.add(selectedFile.path);
+			}
 		} catch {
 			error = 'Cannot connect to makina server. Run: docker compose up -d';
 		} finally {
@@ -242,6 +249,8 @@
 		if (!root) return;
 		folderRoot = root;
 		scannedPaths.clear();
+		scannedFindingsByPath.clear();
+		scanIdsByPath.clear();
 		scanProgress = null;
 		const files = flatFiles(root);
 		if (files.length > 0) handleSelectFile(files[0]);
@@ -281,47 +290,65 @@
 	}
 
 	function handleSelectFile(node: FileNode) {
-		if (!node.content || !node.language) return;
+		if (!node.content) return;
 		selectedFile = node;
 		code = node.content;
-		language = node.language;
-		findings = [];
+		language = node.language ?? 'auto';
+		findings = scannedFindingsByPath.get(node.path) ?? [];
 		focusedFindingId = null;
-		scanCompleted = false;
+		scanCompleted = scannedPaths.has(node.path);
 		resultsStale = false;
-		currentScanId = null;
+		currentScanId = scanIdsByPath.get(node.path) ?? null;
 		error = null;
 	}
 
 	async function handleScanAll() {
 		if (!folderRoot) return;
-		const files = flatFiles(folderRoot);
+		const files = flatFiles(folderRoot).filter((file) => Boolean(file.content));
 		error = null;
+		scanning = true;
 		scanCompleted = false;
 		resultsStale = false;
 		focusedFindingId = null;
+		currentScanId = null;
+		scannedPaths.clear();
+		scannedFindingsByPath.clear();
+		scanIdsByPath.clear();
+		if (selectedFile) findings = [];
 		scanProgress = { current: 0, total: files.length };
-		for (let i = 0; i < files.length; i++) {
-			const f = files[i];
-			if (!f.content || !f.language) continue;
-			try {
-				const result = await scanCode(f.content, f.language);
-				if (selectedFile?.path === f.path) {
-					findings = result.findings;
-					currentScanId = result.scan_id;
-					scanCompleted = true;
-				}
-				scannedPaths.add(f.path);
-			} catch { /* continue */ }
-			scanProgress = { current: i + 1, total: files.length };
+		try {
+			for (let i = 0; i < files.length; i++) {
+				const f = files[i];
+				if (!f.content) continue;
+				const fileLanguage = f.language ?? 'auto';
+				try {
+					const result = await scanCode(f.content, fileLanguage);
+					scannedFindingsByPath.set(f.path, result.findings);
+					scanIdsByPath.set(f.path, result.scan_id);
+					scannedPaths.add(f.path);
+					if (selectedFile?.path === f.path) {
+						findings = result.findings;
+						currentScanId = result.scan_id;
+						scanCompleted = true;
+					}
+				} catch { /* continue */ }
+				scanProgress = { current: i + 1, total: files.length };
+			}
+			if (selectedFile && scannedPaths.has(selectedFile.path)) {
+				scanCompleted = true;
+			}
+		} finally {
+			scanning = false;
+			scanProgress = null;
 		}
-		scanProgress = null;
 	}
 
 	function handleClearFolder() {
 		folderRoot = null;
 		selectedFile = null;
 		scannedPaths.clear();
+		scannedFindingsByPath.clear();
+		scanIdsByPath.clear();
 		scanProgress = null;
 	}
 
