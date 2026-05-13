@@ -2,9 +2,30 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+	--mk-bg: #060a12;
+	--mk-bg-soft: #080d18;
+	--mk-bg-panel: #0a0f1c;
+	--mk-bg-elevated: #0e1424;
+	--mk-bg-hover: #11182a;
+	--mk-bg-code: #0b1120;
+	--mk-border: #1a2035;
+	--mk-border-strong: #2b3350;
+	--mk-text: #f4f1e8;
+	--mk-text-soft: #d8c7aa;
+	--mk-text-muted: #8992a8;
+	--mk-brand: #8b5cf6;
+	--mk-brand-strong: #a78bfa;
+	--mk-brand-deep: #312e81;
+	--mk-copper: #b98252;
+	--mk-copper-strong: #c08457;
+	--mk-teal: #14b8a6;
+	--mk-teal-strong: #2dd4bf;
+}
+
 * {
 	box-sizing: border-box;
-	scrollbar-color: #475569 #070b14;
+	scrollbar-color: var(--mk-border-strong) var(--mk-bg-panel);
 	scrollbar-width: thin;
 }
 
@@ -24,11 +45,42 @@ body {
 }
 
 html {
-	background: #060a12;
+	background: var(--mk-bg);
 }
 
 body {
 	overflow: hidden;
+	color: var(--mk-text);
+	background: var(--mk-bg);
+}
+
+.mk-app-bg {
+	background:
+		radial-gradient(circle at 22% 18%, rgba(79, 70, 229, 0.16), transparent 34rem),
+		radial-gradient(circle at 86% 8%, rgba(139, 92, 246, 0.12), transparent 32rem),
+		linear-gradient(180deg, rgba(8, 13, 24, 0.94), var(--mk-bg) 42%),
+		var(--mk-bg);
+}
+
+.mk-rail {
+	background: linear-gradient(180deg, #070b14, #050914);
+	border-color: var(--mk-border);
+}
+
+.mk-panel {
+	background: color-mix(in srgb, var(--mk-bg-panel) 92%, transparent);
+	border-color: var(--mk-border);
+}
+
+.mk-panel-strong {
+	background: var(--mk-bg-elevated);
+	border-color: var(--mk-border-strong);
+}
+
+.mk-brand-glow {
+	box-shadow:
+		0 0 0 1px rgba(139, 92, 246, 0.28),
+		0 0 28px rgba(79, 70, 229, 0.16);
 }
 
 *::-webkit-scrollbar {
@@ -37,21 +89,21 @@ body {
 }
 
 *::-webkit-scrollbar-track {
-	background: #070b14;
+	background: var(--mk-bg-panel);
 	border-radius: 999px;
 }
 
 *::-webkit-scrollbar-thumb {
 	min-height: 36px;
-	background: linear-gradient(180deg, #475569, #334155);
-	border: 2px solid #070b14;
+	background: linear-gradient(180deg, rgba(139, 92, 246, 0.56), rgba(185, 130, 82, 0.46));
+	border: 2px solid var(--mk-bg-panel);
 	border-radius: 999px;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-	background: linear-gradient(180deg, #64748b, #475569);
+	background: linear-gradient(180deg, rgba(167, 139, 250, 0.82), rgba(192, 132, 87, 0.72));
 }
 
 *::-webkit-scrollbar-corner {
-	background: #070b14;
+	background: var(--mk-bg-panel);
 }

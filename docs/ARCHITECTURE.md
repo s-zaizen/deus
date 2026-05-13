@@ -552,6 +552,7 @@ makina/
 │           ├── audit.ts   Audit run client (Rust /api/audit/run boundary)
 │           ├── highlighter.ts  shiki singleton (vitesse-dark theme)
 │           ├── api.ts     fetch wrappers (PUBLIC_API_URL)
+│           ├── theme.ts   shared Makina theme tokens for UI severity and branding
 │           ├── types.ts   shared TypeScript types
 │           ├── folder.ts  folder drag-and-drop utilities
 │           └── placeholders.ts  per-language sample snippets for the Scan tab

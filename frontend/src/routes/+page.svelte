@@ -363,10 +363,10 @@
 	}
 </script>
 
-<div class="relative flex h-screen text-gray-100 overflow-hidden" style="background:#060a12;">
+<div class="mk-app-bg relative flex h-screen overflow-hidden text-[var(--mk-text)]">
 
 	<!-- Left rail: icon-only vertical tabs -->
-	<aside class="relative z-10 flex h-full w-16 shrink-0 flex-col bg-gray-950 border-r border-gray-800/80">
+	<aside class="mk-rail relative z-10 flex h-full w-16 shrink-0 flex-col border-r">
 		<nav class="no-scrollbar flex min-h-0 flex-1 flex-col gap-1 overflow-x-hidden overflow-y-auto p-2">
 			{#each VISIBLE_TABS as tab}
 				<button
@@ -376,16 +376,16 @@
 					class={[
 						'group relative flex items-center justify-center h-11 rounded-xl transition-all',
 						activeTab === tab
-							? 'bg-indigo-600/20 text-indigo-300'
-							: 'text-gray-600 hover:text-gray-400 hover:bg-gray-900'
+							? 'bg-violet-500/20 text-[var(--mk-text)] shadow-[inset_0_0_0_1px_rgba(139,92,246,0.24)]'
+							: 'text-gray-600 hover:text-[var(--mk-text-soft)] hover:bg-[var(--mk-bg-elevated)]'
 					].join(' ')}
 				>
 					<!-- Active indicator -->
 					{#if activeTab === tab}
-						<span class="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 bg-indigo-500 rounded-r-full"></span>
+						<span class="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 rounded-r-full bg-[var(--mk-copper)] shadow-[0_0_14px_rgba(185,130,82,0.4)]"></span>
 					{/if}
 					<!-- Tooltip -->
-					<span class="absolute left-full ml-3 px-2.5 py-1.5 bg-gray-800 text-gray-200 text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none border border-gray-700/60 shadow-xl z-50">
+					<span class="absolute left-full ml-3 px-2.5 py-1.5 bg-[var(--mk-bg-elevated)] text-[var(--mk-text)] text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none border border-[var(--mk-border-strong)] shadow-xl z-50">
 						{TAB_DESCRIPTIONS[tab]}
 					</span>
 					<span class="relative">
@@ -411,7 +411,7 @@
 							</svg>
 						{/if}
 						{#if tab === 'verify' && verifyCases.length > 0 && !PUBLIC_MODE}
-							<span class="absolute -top-1 -right-1.5 w-4 h-4 text-[10px] font-bold bg-indigo-500 text-white rounded-full flex items-center justify-center">
+							<span class="absolute -top-1 -right-1.5 w-4 h-4 text-[10px] font-bold bg-violet-500 text-white rounded-full flex items-center justify-center">
 								{verifyCases.length}
 							</span>
 						{/if}
@@ -419,16 +419,16 @@
 				</button>
 			{/each}
 		</nav>
-		<div class="flex h-9 shrink-0 items-center justify-center border-t border-gray-700 bg-gray-900 px-2">
+		<div class="flex h-9 shrink-0 items-center justify-center border-t border-[var(--mk-border)] bg-[var(--mk-bg-panel)] px-2">
 			<a
 				href={GITHUB_REPO_URL}
 				target="_blank"
 				rel="noreferrer"
 				aria-label="Open GitHub repository"
 				title="GitHub repository"
-				class="group relative flex h-7 w-full items-center justify-center rounded-lg text-gray-600 transition-all hover:bg-gray-800/60 hover:text-gray-300"
+				class="group relative flex h-7 w-full items-center justify-center rounded-lg text-gray-600 transition-all hover:bg-[var(--mk-bg-elevated)] hover:text-[var(--mk-text-soft)]"
 			>
-				<span class="absolute left-full ml-3 rounded-lg border border-gray-700/60 bg-gray-800 px-2.5 py-1.5 text-xs text-gray-200 opacity-0 shadow-xl transition-opacity pointer-events-none whitespace-nowrap group-hover:opacity-100 z-50">
+				<span class="absolute left-full ml-3 rounded-lg border border-[var(--mk-border-strong)] bg-[var(--mk-bg-elevated)] px-2.5 py-1.5 text-xs text-[var(--mk-text)] opacity-0 shadow-xl transition-opacity pointer-events-none whitespace-nowrap group-hover:opacity-100 z-50">
 					GitHub repository
 				</span>
 				<svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -443,7 +443,7 @@
 	</aside>
 
 	<!-- Main column -->
-	<div class="relative z-10 flex flex-col flex-1 min-w-0 min-h-0 bg-gray-950">
+	<div class="relative z-10 flex flex-col flex-1 min-w-0 min-h-0 bg-[var(--mk-bg)]">
 
 	<!-- Content -->
 		<div
@@ -451,7 +451,7 @@
 			style:display={activeTab === 'scan' ? 'flex' : 'none'}
 			aria-hidden={activeTab !== 'scan'}
 		>
-			<div class="lg:hidden flex h-11 shrink-0 items-center overflow-hidden border-b border-gray-800/80 bg-gray-950 px-3">
+			<div class="lg:hidden flex h-11 shrink-0 items-center overflow-hidden border-b border-[var(--mk-border)] bg-[var(--mk-bg-panel)] px-3">
 				<ScanPanel
 					{language}
 					onlanguagechange={handleLanguageChange}
@@ -466,7 +466,7 @@
 			     placeholder until a folder is loaded so users see the
 			     workspace layout from the first paint. -->
 			<div
-				class="relative hidden w-56 shrink-0 flex-col border-r border-gray-800/80 bg-gray-950 lg:flex xl:w-64"
+				class="relative hidden w-56 shrink-0 flex-col border-r border-[var(--mk-border)] bg-[var(--mk-bg-panel)] lg:flex xl:w-64"
 				ondragenter={handleExplorerDragEnter}
 				ondragover={handleExplorerDragOver}
 				ondragleave={handleExplorerDragLeave}
@@ -476,12 +476,12 @@
 			>
 				{#if explorerDragging}
 					<div
-						class="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-950/90 px-4 text-center"
-						style="border:2px dashed #4f46e5;"
+						class="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-[var(--mk-bg-panel)] px-4 text-center"
+						style="border:2px dashed var(--mk-brand);"
 					>
-						<div class="flex h-12 w-12 items-center justify-center rounded-xl border border-indigo-500/40 bg-indigo-950/50">
+						<div class="flex h-12 w-12 items-center justify-center rounded-xl border border-violet-500/40 bg-violet-950/40">
 							<svg
-								class="h-6 w-6 text-indigo-300"
+								class="h-6 w-6 text-violet-200"
 								fill="none"
 								viewBox="0 0 24 24"
 								stroke="currentColor"
@@ -495,7 +495,7 @@
 							</svg>
 						</div>
 						<div class="space-y-1">
-							<p class="text-sm font-semibold text-indigo-200">
+							<p class="text-sm font-semibold text-violet-100">
 								Drop to {folderRoot ? 'replace workspace' : 'open workspace'}
 							</p>
 							<p class="text-xs text-gray-500">
@@ -516,13 +516,13 @@
 					/>
 				{:else}
 					<div class="flex h-full flex-col">
-						<div class="flex items-center gap-2 h-11 px-3 border-b border-gray-800/80 shrink-0">
+						<div class="flex items-center gap-2 h-11 px-3 border-b border-[var(--mk-border)] shrink-0">
 							<span class="text-[10px] font-bold text-gray-500 uppercase tracking-wider truncate flex-1">
 								Explorer
 							</span>
 						</div>
 						<div class="flex flex-1 flex-col items-center justify-center gap-4 px-4 text-center">
-							<div class="w-14 h-14 rounded-xl bg-gray-900 flex items-center justify-center border border-dashed border-gray-700/60">
+							<div class="w-14 h-14 rounded-xl bg-[var(--mk-bg-elevated)] flex items-center justify-center border border-dashed border-[var(--mk-border-strong)]">
 								<svg
 									class="w-7 h-7 text-gray-500"
 									fill="none"
@@ -551,7 +551,7 @@
 			</div>
 
 			<!-- Editor -->
-			<div class="flex flex-1 flex-col min-h-0 border-r border-gray-800/60">
+			<div class="flex flex-1 flex-col min-h-0 border-r border-[var(--mk-border)]">
 				<CodeEditor
 					value={code}
 					onchange={handleCodeChange}
@@ -564,9 +564,9 @@
 			</div>
 
 			<!-- Findings panel -->
-			<div class="hidden lg:flex w-80 xl:w-96 shrink-0 flex-col bg-gray-950 border-l border-gray-800/80">
+			<div class="hidden lg:flex w-80 xl:w-96 shrink-0 flex-col bg-[var(--mk-bg-panel)] border-l border-[var(--mk-border)]">
 				<!-- Findings header with scan controls -->
-				<div class="flex h-11 shrink-0 items-center gap-2 overflow-hidden border-b border-gray-800/80 px-3">
+				<div class="flex h-11 shrink-0 items-center gap-2 overflow-hidden border-b border-[var(--mk-border)] px-3">
 					<ScanPanel
 						{language}
 						onlanguagechange={handleLanguageChange}
@@ -591,18 +591,18 @@
 				/>
 			</div>
 
-			<div class="lg:hidden flex max-h-[42vh] shrink-0 flex-col border-t border-gray-800/80 bg-gray-950">
-				<div class="flex h-11 shrink-0 items-center justify-between border-b border-gray-800/80 px-3">
+			<div class="lg:hidden flex max-h-[42vh] shrink-0 flex-col border-t border-[var(--mk-border)] bg-[var(--mk-bg-panel)]">
+				<div class="flex h-11 shrink-0 items-center justify-between border-b border-[var(--mk-border)] px-3">
 					<span class="text-[10px] font-bold uppercase tracking-wider text-gray-500">
 						Findings
 					</span>
 					<div class="flex items-center gap-2">
-						<span class="rounded border border-gray-800 bg-gray-900 px-2 py-0.5 text-[10px] font-semibold text-gray-400">
+						<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 py-0.5 text-[10px] font-semibold text-gray-400">
 							{findingCountText}
 						</span>
 						<button
 							onclick={() => { findings = []; scanCompleted = false; resultsStale = false; currentScanId = null; error = null; focusedFindingId = null; }}
-							class="p-1 rounded text-gray-600 hover:text-gray-400 hover:bg-gray-900 cursor-pointer"
+							class="p-1 rounded text-gray-600 hover:text-[var(--mk-text-soft)] hover:bg-[var(--mk-bg-elevated)] cursor-pointer"
 							aria-label="Clear findings"
 							title="Clear findings"
 						>

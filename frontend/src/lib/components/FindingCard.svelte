@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { highlightSnippet } from '$lib/highlighter';
-	import type { Finding, Label, Language, Severity } from '$lib/types';
+	import { severityTone } from '$lib/theme';
+	import type { Finding, Label, Language } from '$lib/types';
 
 	let {
 		finding,
@@ -23,33 +24,15 @@
 		existingLabel?: Label | null;
 	} = $props();
 
-	const severityStyles: Record<Severity, string> = {
-		critical: 'text-red-400 bg-red-950 border-red-800',
-		high: 'text-orange-400 bg-orange-950 border-orange-800',
-		medium: 'text-yellow-400 bg-yellow-950 border-yellow-800',
-		low: 'text-blue-400 bg-blue-950 border-blue-800'
-	};
-	const severityBorderLeft: Record<Severity, string> = {
-		critical: 'border-l-red-600',
-		high: 'border-l-orange-500',
-		medium: 'border-l-yellow-500',
-		low: 'border-l-blue-400'
-	};
-	const severityBarColor: Record<Severity, string> = {
-		critical: 'bg-red-600',
-		high: 'bg-orange-500',
-		medium: 'bg-yellow-500',
-		low: 'bg-blue-400'
-	};
-
 	let interactiveLabel = $state<Label | null>(null);
 	const labeled = $derived<Label | null>(readonly ? (existingLabel ?? null) : interactiveLabel);
 	let loading = $state(false);
 	let closing = $state(false);
 	let highlightedHtml = $state('');
 
-	const borderColor = $derived(severityBorderLeft[finding.severity]);
-	const barColor = $derived(severityBarColor[finding.severity]);
+	const tone = $derived(severityTone(finding.severity));
+	const borderColor = $derived(tone.border);
+	const barColor = $derived(tone.track);
 	const confidencePct = $derived(Math.round(finding.confidence * 100));
 	const lineRange = $derived(
 		finding.line_end > finding.line_start
@@ -105,17 +88,17 @@
 	onclick={onfocus}
 	onkeydown={(e) => e.key === 'Enter' && onfocus?.()}
 	class={[
-		'rounded border bg-gray-900/60 border-l-4 p-3 flex flex-col gap-2 transition-all',
+		'rounded border bg-[var(--mk-bg-elevated)] border-l-4 p-3 flex flex-col gap-2 transition-all',
 		borderColor,
 		focused
-			? 'border-gray-600 ring-1 ring-indigo-500/50 cursor-default'
-			: 'border-gray-700 cursor-pointer hover:border-gray-600 hover:bg-gray-900/80'
+			? 'border-violet-500/70 ring-1 ring-violet-500/45 shadow-[0_0_22px_rgba(79,70,229,0.14)] cursor-default'
+			: 'border-[var(--mk-border-strong)] cursor-pointer hover:border-[#3a4260] hover:bg-[var(--mk-bg-hover)]'
 	].join(' ')}
 >
 	<!-- Header -->
 	<div class="flex flex-wrap items-center gap-1.5">
 		<span
-			class={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${severityStyles[finding.severity]} uppercase tracking-wide shrink-0`}
+			class={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${tone.badge} uppercase tracking-wide shrink-0`}
 		>
 			{finding.severity}
 		</span>
@@ -142,7 +125,7 @@
 			</span>
 		{/if}
 		{#if focused}
-			<span class="ml-auto text-[10px] text-indigo-400/70 shrink-0">↑ in editor</span>
+			<span class="ml-auto text-[10px] text-[var(--mk-text-soft)] shrink-0">↑ in editor</span>
 		{/if}
 	</div>
 
@@ -151,8 +134,8 @@
 
 	<!-- Code snippet -->
 	{#if finding.code_snippet}
-		<div class="rounded border border-gray-800 overflow-hidden">
-			<div class="flex items-center justify-between px-3 py-1 bg-gray-800/60 border-b border-gray-800">
+		<div class="rounded border border-[var(--mk-border)] overflow-hidden">
+			<div class="flex items-center justify-between px-3 py-1 bg-[var(--mk-bg-hover)] border-b border-[var(--mk-border)]">
 				<span class="text-xs font-mono text-gray-500">{lineRange}</span>
 			</div>
 			{#if highlightedHtml}
@@ -170,7 +153,7 @@
 	<!-- Confidence bar -->
 	<div class="flex items-center gap-2">
 		<span class="text-xs text-gray-500 w-20 shrink-0">Confidence {confidencePct}%</span>
-		<div class="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+		<div class="flex-1 h-1.5 bg-[var(--mk-border)] rounded-full overflow-hidden">
 			<div class={`h-full rounded-full ${barColor}`} style="width:{confidencePct}%"></div>
 		</div>
 	</div>
@@ -182,7 +165,7 @@
 				<span class={[
 					'text-xs font-semibold px-3 py-1 rounded border',
 					labeled === 'tp'
-						? 'bg-green-700 border-green-600 text-white'
+						? 'bg-teal-700 border-teal-600 text-white'
 						: 'bg-red-700 border-red-600 text-white'
 				].join(' ')}>
 					{labeled === 'tp' ? '✓ True Positive' : '✗ False Positive'}
@@ -197,10 +180,10 @@
 				class={[
 					'flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded border transition-colors',
 					labeled === 'tp'
-						? 'bg-green-700 border-green-600 text-white'
+						? 'bg-teal-700 border-teal-600 text-white'
 						: labeled === 'fp'
-							? 'bg-gray-800 border-gray-700 text-gray-500 cursor-not-allowed'
-							: 'bg-green-900/40 border-green-700 text-green-400 hover:bg-green-900/70 cursor-pointer'
+							? 'bg-[var(--mk-border)] border-[var(--mk-border-strong)] text-gray-500 cursor-not-allowed'
+							: 'bg-teal-950/40 border-teal-700 text-teal-300 hover:bg-teal-950/70 cursor-pointer'
 				].join(' ')}
 			>
 				{#if labeled === 'tp'}
@@ -221,7 +204,7 @@
 					labeled === 'fp'
 						? 'bg-red-700 border-red-600 text-white'
 						: labeled === 'tp'
-							? 'bg-gray-800 border-gray-700 text-gray-500 cursor-not-allowed'
+							? 'bg-[var(--mk-border)] border-[var(--mk-border-strong)] text-gray-500 cursor-not-allowed'
 							: 'bg-red-900/40 border-red-700 text-red-400 hover:bg-red-900/70 cursor-pointer'
 				].join(' ')}
 			>
@@ -242,8 +225,8 @@
 					class={[
 						'col-span-2 flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded border transition-colors',
 						labeled
-							? 'bg-gray-800 border-gray-700 text-gray-500 cursor-not-allowed'
-							: 'bg-gray-900/70 border-gray-700 text-gray-300 hover:bg-gray-800 hover:border-gray-600 cursor-pointer'
+							? 'bg-[var(--mk-border)] border-[var(--mk-border-strong)] text-gray-500 cursor-not-allowed'
+							: 'bg-[var(--mk-bg-elevated)] border-[var(--mk-border-strong)] text-gray-300 hover:bg-[var(--mk-bg-hover)] hover:border-violet-500/50 cursor-pointer'
 					].join(' ')}
 				>
 					<span>&#8722;</span>

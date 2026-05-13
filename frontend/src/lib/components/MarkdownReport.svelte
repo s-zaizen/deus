@@ -175,9 +175,9 @@
 		{#if node.type === 'text'}
 			{node.text}
 		{:else if node.type === 'strong'}
-			<strong class="font-semibold text-gray-100">{@render inlineNodes(node.children)}</strong>
+			<strong class="font-semibold text-[var(--mk-text)]">{@render inlineNodes(node.children)}</strong>
 		{:else if node.type === 'code'}
-			<code class="rounded bg-gray-800 px-1 py-0.5 font-mono text-[11px] text-gray-300">{node.text}</code>
+			<code class="rounded bg-[var(--mk-border)] px-1 py-0.5 font-mono text-[11px] text-[var(--mk-text-soft)]">{node.text}</code>
 		{/if}
 	{/each}
 {/snippet}
@@ -186,19 +186,19 @@
 	{#each blocks as block}
 		{#if block.type === 'heading'}
 			{#if block.level === 1}
-				<h1 class={compact ? 'mb-3 mt-4 border-b border-gray-800 pb-2 text-base font-bold text-gray-100 first:mt-0' : 'mb-4 mt-6 border-b border-gray-800 pb-2 text-lg font-bold text-gray-100 first:mt-0'}>
+				<h1 class={compact ? 'mb-3 mt-4 border-b border-[var(--mk-border)] pb-2 text-base font-bold text-[var(--mk-text)] first:mt-0' : 'mb-4 mt-6 border-b border-[var(--mk-border)] pb-2 text-lg font-bold text-[var(--mk-text)] first:mt-0'}>
 					{@render inlineNodes(block.children)}
 				</h1>
 			{:else if block.level === 2}
-				<h2 class={compact ? 'mb-2 mt-5 border-t border-gray-800 pt-4 text-sm font-bold text-gray-100 first:mt-0 first:border-t-0 first:pt-0' : 'mb-3 mt-7 border-t border-gray-800 pt-5 text-base font-bold text-gray-100 first:mt-0 first:border-t-0 first:pt-0'}>
+				<h2 class={compact ? 'mb-2 mt-5 border-t border-[var(--mk-border)] pt-4 text-sm font-bold text-[var(--mk-text)] first:mt-0 first:border-t-0 first:pt-0' : 'mb-3 mt-7 border-t border-[var(--mk-border)] pt-5 text-base font-bold text-[var(--mk-text)] first:mt-0 first:border-t-0 first:pt-0'}>
 					{@render inlineNodes(block.children)}
 				</h2>
 			{:else if block.level === 3}
-				<h3 class={compact ? 'mb-2 mt-4 border-l-2 border-gray-700 pl-2 text-[11px] font-bold uppercase tracking-wider text-gray-400' : 'mb-2 mt-5 border-l-2 border-gray-600 pl-2.5 text-xs font-bold uppercase tracking-wider text-gray-400'}>
+				<h3 class={compact ? 'mb-2 mt-4 border-l-2 border-[var(--mk-copper)] pl-2 text-[11px] font-bold uppercase tracking-wider text-[var(--mk-text-soft)]' : 'mb-2 mt-5 border-l-2 border-[var(--mk-copper)] pl-2.5 text-xs font-bold uppercase tracking-wider text-[var(--mk-text-soft)]'}>
 					{@render inlineNodes(block.children)}
 				</h3>
 			{:else}
-				<h4 class={compact ? 'mb-1.5 mt-3 text-xs font-semibold text-gray-300' : 'mb-2 mt-4 text-sm font-semibold text-gray-300'}>
+				<h4 class={compact ? 'mb-1.5 mt-3 text-xs font-semibold text-violet-200' : 'mb-2 mt-4 text-sm font-semibold text-violet-200'}>
 					{@render inlineNodes(block.children)}
 				</h4>
 			{/if}
@@ -207,9 +207,9 @@
 				{@render inlineNodes(block.children)}
 			</p>
 		{:else if block.type === 'code'}
-			<div class={compact ? 'mb-3 overflow-x-auto rounded-md border border-gray-800 bg-gray-900' : 'mb-4 overflow-x-auto rounded-md border border-gray-800 bg-gray-900'}>
+			<div class={compact ? 'mb-3 overflow-x-auto rounded-md border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)]' : 'mb-4 overflow-x-auto rounded-md border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)]'}>
 				{#if block.language}
-					<div class="border-b border-gray-800 px-3 py-1 text-[10px] font-mono uppercase text-gray-600">
+					<div class="border-b border-[var(--mk-border)] px-3 py-1 text-[10px] font-mono uppercase text-gray-600">
 						{block.language}
 					</div>
 				{/if}
@@ -230,9 +230,9 @@
 				</ul>
 			{/if}
 		{:else if block.type === 'table'}
-			<div class={compact ? 'mb-3 overflow-x-auto rounded-md border border-gray-800' : 'mb-4 overflow-x-auto rounded-md border border-gray-800'}>
+			<div class={compact ? 'mb-3 overflow-x-auto rounded-md border border-[var(--mk-border)]' : 'mb-4 overflow-x-auto rounded-md border border-[var(--mk-border)]'}>
 				<table class="min-w-full border-collapse text-left text-xs">
-					<thead class="bg-gray-900/80 text-[10px] uppercase tracking-wider text-gray-500">
+					<thead class="bg-[var(--mk-bg-elevated)] text-[10px] uppercase tracking-wider text-gray-500">
 						<tr>
 							{#each block.headers as header}
 								<th class="border-b border-gray-800 px-3 py-2 font-semibold">
@@ -243,7 +243,7 @@
 					</thead>
 					<tbody>
 						{#each block.rows as row}
-							<tr class="border-b border-gray-800/70 last:border-0">
+							<tr class="border-b border-[var(--mk-border)] last:border-0">
 								{#each row as cell}
 									<td class="align-top px-3 py-2 text-gray-300">
 										{@render inlineNodes(cell)}

@@ -206,6 +206,7 @@ frontend/src/        SvelteKit UI (Svelte 5 Runes)
   lib/components/    Scan / Audit / Verify / Knowledge / Model tab components
   lib/audit.ts       Audit run client over /api/audit/run
   lib/api.ts         fetch wrappers (PUBLIC_API_URL)
+  lib/theme.ts       Shared Makina theme tokens for UI severity and branding
   lib/placeholders.ts  per-language sample snippets for the Scan tab
 samples/vulnerable-code/
                      Intentionally vulnerable local scanner fixtures

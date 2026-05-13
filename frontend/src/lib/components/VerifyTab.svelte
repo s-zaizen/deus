@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { highlightSnippet } from '$lib/highlighter';
 	import { PUBLIC_MODE } from '$lib/flags';
+	import { severityTone } from '$lib/theme';
 	import type { Label, VerifyCase } from '$lib/types';
 
 	let {
@@ -26,13 +27,6 @@
 		c: 'text-gray-400 bg-gray-800 border-gray-600',
 		cpp: 'text-purple-400 bg-purple-950 border-purple-800'
 	};
-	const sevColor: Record<string, string> = {
-		critical: 'text-red-400',
-		high: 'text-orange-400',
-		medium: 'text-yellow-400',
-		low: 'text-blue-400'
-	};
-
 	function formatDate(iso: string) {
 		const d = new Date(iso);
 		const date = d.toLocaleDateString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -116,7 +110,7 @@
 </script>
 
 {#if PUBLIC_MODE}
-	<div class="flex-1 flex items-center justify-center bg-gray-950/70">
+	<div class="flex-1 flex items-center justify-center bg-[var(--mk-bg)]">
 		<div class="max-w-md px-6 text-center">
 			<div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-xl border border-amber-900/70 bg-amber-950/25">
 				<svg class="h-7 w-7 text-amber-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
@@ -134,9 +128,9 @@
 		</div>
 	</div>
 {:else if cases.length === 0}
-	<div class="flex-1 flex items-center justify-center bg-gray-950/70">
+	<div class="flex-1 flex items-center justify-center bg-[var(--mk-bg)]">
 		<div class="text-center max-w-sm px-4">
-			<div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-gray-800/40 border border-dashed border-gray-700/60 flex items-center justify-center">
+			<div class="w-16 h-16 mx-auto mb-4 rounded-xl bg-[var(--mk-bg-elevated)] border border-dashed border-[var(--mk-border-strong)] flex items-center justify-center">
 				<svg class="w-7 h-7 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
 					<path stroke-linecap="round" stroke-linejoin="round"
 						d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
@@ -149,7 +143,7 @@
 		</div>
 	</div>
 {:else}
-	<div class="flex-1 overflow-y-auto px-6 py-5 bg-gray-950/70">
+	<div class="flex-1 overflow-y-auto px-6 py-5 bg-[var(--mk-bg)]">
 		<div class="max-w-full lg:max-w-2xl xl:max-w-3xl mx-auto space-y-3">
 			<!-- Search + language filter -->
 			<div class="flex flex-col gap-2 mb-3">
@@ -157,7 +151,7 @@
 					bind:value={searchQuery}
 					type="text"
 					placeholder="Search CVE, rule, CWE, message…"
-					class="w-full bg-gray-800/60 border border-gray-700 rounded-md px-3 py-1.5 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-indigo-600/60 transition-colors"
+					class="w-full bg-[var(--mk-bg-elevated)] border border-[var(--mk-border)] rounded-md px-3 py-1.5 text-xs text-[var(--mk-text)] placeholder-gray-600 focus:outline-none focus:border-violet-500/70 transition-colors"
 				/>
 				{#if availableLangs.length > 1}
 					<div class="flex flex-wrap gap-1">
@@ -167,15 +161,15 @@
 								class={[
 									'text-xs px-2 py-1 rounded border font-mono text-center min-w-[64px] transition-colors cursor-pointer',
 									filterLang === lang
-										? 'bg-indigo-700 border-indigo-600 text-white'
-										: 'bg-gray-800 border-gray-700 text-gray-500 hover:text-gray-300'
+										? 'bg-violet-700 border-violet-600 text-white'
+										: 'bg-[var(--mk-bg-elevated)] border-[var(--mk-border)] text-gray-500 hover:text-[var(--mk-text-soft)]'
 								].join(' ')}
 							>{lang.toUpperCase()}</button>
 						{/each}
 						{#if filterLang}
 							<button
 								onclick={() => { filterLang = null; }}
-								class="text-xs px-2 py-1 rounded border bg-gray-800 border-gray-700 text-gray-600 hover:text-gray-400 transition-colors cursor-pointer"
+								class="text-xs px-2 py-1 rounded border bg-[var(--mk-bg-elevated)] border-[var(--mk-border)] text-gray-600 hover:text-[var(--mk-text-soft)] transition-colors cursor-pointer"
 							>✕ clear</button>
 						{/if}
 					</div>
@@ -195,7 +189,7 @@
 					<p class="text-sm text-gray-600">No cases match the current filter.</p>
 					<button
 						onclick={() => { searchQuery = ''; filterLang = null; }}
-						class="text-xs text-indigo-500 hover:text-indigo-400 transition-colors cursor-pointer"
+						class="text-xs text-violet-300 hover:text-violet-200 transition-colors cursor-pointer"
 					>Clear filters</button>
 				</div>
 			{/if}
@@ -208,13 +202,13 @@
 				{@const submitting = submittingCases[vc.caseNo] ?? false}
 				{@const closing = closingCases[vc.caseNo] ?? false}
 
-				<div class="rounded-xl border border-gray-800 bg-gray-900 overflow-hidden">
+				<div class="rounded-xl border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] overflow-hidden">
 					<!-- Header -->
 					<button
 						onclick={() => toggleExpand(vc)}
-						class="w-full flex items-center gap-2.5 px-4 py-3 hover:bg-gray-800/50 transition-colors text-left"
+						class="w-full flex items-center gap-2.5 px-4 py-3 hover:bg-[var(--mk-bg-hover)] transition-colors text-left"
 					>
-						<span class="font-mono text-sm font-bold text-indigo-400 shrink-0">
+						<span class="font-mono text-sm font-bold text-violet-200 shrink-0">
 							#{String(vc.caseNo).padStart(4, '0')}
 						</span>
 						{#if vc.cveId}
@@ -227,7 +221,7 @@
 						<span class="text-xs text-gray-500 shrink-0">{vc.findings.length} findings</span>
 						{#if labeledCount > 0}
 							<span class="text-xs text-gray-600 shrink-0">
-								{#if tpCount > 0}<span class="text-emerald-600">TP:{tpCount}</span>{/if}
+								{#if tpCount > 0}<span class="text-teal-500">TP:{tpCount}</span>{/if}
 								{#if tpCount > 0 && fpCount > 0}<span class="text-gray-700 mx-1">·</span>{/if}
 								{#if fpCount > 0}<span class="text-red-700">FP:{fpCount}</span>{/if}
 							</span>
@@ -242,7 +236,7 @@
 
 					<!-- Body -->
 					{#if expanded}
-						<div class="border-t border-gray-800 divide-y divide-gray-800/60">
+						<div class="border-t border-[var(--mk-border)] divide-y divide-[var(--mk-border)]/70">
 							{#each vc.findings as f (f.id)}
 								{@const labeled = vc.labels[f.id] ?? null}
 
@@ -250,12 +244,12 @@
 									<div class="flex-1 min-w-0 space-y-2">
 										<!-- Finding meta -->
 										<div class="flex flex-wrap items-center gap-2">
-											<span class={`text-xs font-bold uppercase ${sevColor[f.severity] ?? 'text-gray-400'}`}>
+											<span class={`text-xs font-bold uppercase ${severityTone(f.severity).text}`}>
 												{f.severity}
 											</span>
 											<span class="font-mono text-xs text-gray-500">{f.rule_id}</span>
 											{#if f.cwe}
-												<span class="text-xs text-gray-600 font-mono px-1 bg-gray-800 rounded border border-gray-700">
+												<span class="text-xs text-gray-600 font-mono px-1 bg-[var(--mk-border)] rounded border border-[var(--mk-border-strong)]">
 													{f.cwe}
 												</span>
 											{/if}
@@ -269,7 +263,7 @@
 
 										<!-- Code snippet -->
 										{#if f.code_snippet}
-											<div class="rounded border border-gray-800 overflow-hidden">
+											<div class="rounded border border-[var(--mk-border)] overflow-hidden">
 												{#if codeCache[f.id]}
 													<div
 														class="shiki-snippet"
@@ -292,10 +286,10 @@
 											class={[
 												'text-xs px-3 py-1 rounded border font-medium transition-colors',
 												labeled === 'tp'
-													? 'bg-emerald-700 border-emerald-600 text-white'
+													? 'bg-teal-700 border-teal-600 text-white'
 													: labeled === 'fp'
-														? 'bg-gray-800 border-gray-700 text-gray-600 cursor-not-allowed'
-														: 'bg-emerald-900/30 border-emerald-700/60 text-emerald-400 hover:bg-emerald-900/60 cursor-pointer'
+														? 'bg-[var(--mk-border)] border-[var(--mk-border-strong)] text-gray-600 cursor-not-allowed'
+														: 'bg-teal-950/35 border-teal-700/60 text-teal-300 hover:bg-teal-950/65 cursor-pointer'
 											].join(' ')}
 										>
 											TP
@@ -308,7 +302,7 @@
 												labeled === 'fp'
 													? 'bg-red-700 border-red-600 text-white'
 													: labeled === 'tp'
-														? 'bg-gray-800 border-gray-700 text-gray-600 cursor-not-allowed'
+														? 'bg-[var(--mk-border)] border-[var(--mk-border-strong)] text-gray-600 cursor-not-allowed'
 														: 'bg-red-900/30 border-red-700/60 text-red-400 hover:bg-red-900/60 cursor-pointer'
 											].join(' ')}
 										>
@@ -319,11 +313,11 @@
 							{/each}
 
 							<!-- Submit footer -->
-							<div class="px-4 py-3 bg-gray-900/60 flex items-center justify-between gap-3">
+							<div class="px-4 py-3 bg-[var(--mk-bg-panel)] flex items-center justify-between gap-3">
 								<span class="text-xs text-gray-600">
 									{labeledCount}/{vc.findings.length} labeled
 									{#if labeledCount > 0}
-										&nbsp;·&nbsp;<span class="text-emerald-600">{tpCount} TP</span>
+										&nbsp;·&nbsp;<span class="text-teal-500">{tpCount} TP</span>
 										&nbsp;·&nbsp;<span class="text-red-600">{fpCount} FP</span>
 									{/if}
 								</span>
@@ -334,8 +328,8 @@
 										class={[
 											'px-4 py-1.5 rounded border text-sm font-semibold transition-colors',
 											closing || submitting
-												? 'border-gray-800 bg-gray-800 text-gray-600 cursor-not-allowed'
-												: 'border-gray-700 bg-gray-900 text-gray-400 hover:border-gray-600 hover:text-gray-200 cursor-pointer'
+												? 'border-[var(--mk-border)] bg-[var(--mk-border)] text-gray-600 cursor-not-allowed'
+												: 'border-[var(--mk-border-strong)] bg-[var(--mk-bg-elevated)] text-gray-400 hover:border-violet-500/60 hover:text-[var(--mk-text)] cursor-pointer'
 										].join(' ')}
 									>
 										{closing ? 'Closing…' : 'Close Case'}
@@ -346,8 +340,8 @@
 										class={[
 											'px-5 py-1.5 rounded text-sm font-semibold transition-colors',
 											submitting || closing || labeledCount === 0
-												? 'bg-gray-800 text-gray-600 cursor-not-allowed'
-												: 'bg-indigo-600 hover:bg-indigo-500 text-white cursor-pointer'
+												? 'bg-[var(--mk-border)] text-gray-600 cursor-not-allowed'
+												: 'bg-violet-600 hover:bg-violet-500 text-white cursor-pointer'
 										].join(' ')}
 									>
 										{submitting ? 'Submitting…' : 'Submit to Knowledge'}
