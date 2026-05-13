@@ -165,6 +165,8 @@ pub struct AuditStepRunRequest {
     pub max_output_tokens: u32,
     pub system_prompt: String,
     pub prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -205,6 +207,21 @@ pub struct AuditWorkflowResult {
 pub struct AuditRunResponse {
     pub results: Vec<AuditWorkflowResult>,
     pub report_markdown: String,
+    pub report_sections: Vec<AuditReportSection>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct AuditReportSection {
+    pub id: String,
+    pub finding_id: Option<String>,
+    pub title: String,
+    pub summary: String,
+    pub vulnerability_details: String,
+    pub impact: String,
+    pub proof_of_concept: String,
+    pub remediation: String,
+    pub verification_notes: String,
+    pub confidence: String,
 }
 
 /// Shared `?skip_train=true` query — used by Knowledge submit and

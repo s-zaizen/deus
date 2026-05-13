@@ -37,13 +37,16 @@ manual chunks in `vite.config.ts`; importing `monaco-editor` directly
 rebuilds it as one large production chunk.
 
 Audit LLM integration is initiated by the static frontend, but the fixed
-workflow, prompt assembly, and final Markdown report contract live in the
-Rust backend. Provider calls run through the ML service with the official
-Python `openai` and `anthropic` packages. Do not commit API keys or add
-server-side key persistence; the Audit UI may keep keys in memory or, at
-the user's explicit choice, browser `localStorage`. The final report must
-map scanner findings one-to-one to `MAKINA-001`, `MAKINA-002`, etc.; keep
-that contract backend-owned.
+workflow, prompt assembly, structured report schema, and final Markdown
+report contract live in the Rust backend. Provider calls run through the
+ML service with the official Python `openai` and `anthropic` packages.
+Do not commit API keys or add server-side key persistence; the Audit UI
+may keep keys in memory or, at the user's explicit choice, browser
+`localStorage`. The final report must map scanner findings one-to-one to
+`MAKINA-001`, `MAKINA-002`, etc. and render fixed sections from structured
+fields (`summary`, `vulnerability_details`, `impact`, `proof_of_concept`,
+`remediation`, `verification_notes`, `confidence`); keep that contract
+backend-owned.
 
 Scanner detector changes must preserve the language-agnostic pipeline
 shape: semgrep, CodeBERT semantic analysis, taint analysis, and structural
@@ -205,7 +208,10 @@ frontend/src/        SvelteKit UI (Svelte 5 Runes)
   routes/            +page.svelte (state + layout coordinator)
   lib/components/    Scan / Audit / Verify / Knowledge / Model tab components
   lib/audit.ts       Audit run client over /api/audit/run
+  lib/auditReport.ts Shared MAKINA report section splitting / ID mapping
   lib/api.ts         fetch wrappers (PUBLIC_API_URL)
+  lib/markdown.ts    Shared Markdown parser for report preview and PDF export
+  lib/reportPdf.ts   Client-side Audit PDF generation with pdfmake
   lib/theme.ts       Shared Makina theme tokens for UI severity and branding
   lib/placeholders.ts  per-language sample snippets for the Scan tab
 samples/vulnerable-code/

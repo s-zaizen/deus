@@ -68,6 +68,14 @@
 	const focusedLine = $derived(focusedFinding?.line_start ?? null);
 	const currentFilename = $derived(selectedFile?.name);
 	const findingCountText = $derived(`${findings.length} finding${findings.length === 1 ? '' : 's'}`);
+	const auditAllFindingCount = $derived(
+		folderRoot
+			? flatFiles(folderRoot).reduce(
+					(total, file) => total + (scannedFindingsByPath.get(file.path)?.length ?? 0),
+					0
+				)
+			: 0
+	);
 
 	// ── Init ─────────────────────────────────────────────────────────────────────
 
@@ -184,6 +192,54 @@
 			code,
 			language,
 			findings: [...findings],
+			createdAt: new Date().toISOString()
+		};
+		activeTab = 'audit';
+	}
+
+	function scannedFilesWithFindings() {
+		if (!folderRoot) return [];
+		return flatFiles(folderRoot).filter((file) => (scannedFindingsByPath.get(file.path)?.length ?? 0) > 0);
+	}
+
+	function auditLanguageForFiles(files: FileNode[]): Language {
+		const languages = new Set<Language>();
+		for (const file of files) {
+			if (file.language) languages.add(file.language);
+		}
+		return languages.size === 1 ? [...languages][0] : 'auto';
+	}
+
+	function buildAuditAllCode(files: FileNode[]) {
+		return files
+			.map((file) => {
+				const languageHint = file.language ? ` | language: ${file.language}` : '';
+				return [`/* File: ${file.path}${languageHint} */`, file.content ?? ''].join('\n');
+			})
+			.join('\n\n');
+	}
+
+	function handleSendAllToAudit() {
+		const files = scannedFilesWithFindings();
+		if (files.length === 0) return;
+
+		const auditFindings = files.flatMap((file) =>
+			(scannedFindingsByPath.get(file.path) ?? []).map((finding) => ({
+				...finding,
+				message: `[${file.path}] ${finding.message}`,
+				source: `${finding.source} @ ${file.path}`,
+				code_snippet: `// File: ${file.path}\n${finding.code_snippet}`
+			}))
+		);
+		if (auditFindings.length === 0) return;
+
+		const auditId = crypto.randomUUID();
+		auditCase = {
+			id: auditId,
+			scanId: files.length === 1 ? (scanIdsByPath.get(files[0].path) ?? null) : `audit-all-${auditId}`,
+			code: buildAuditAllCode(files),
+			language: auditLanguageForFiles(files),
+			findings: auditFindings,
 			createdAt: new Date().toISOString()
 		};
 		activeTab = 'audit';
@@ -359,6 +415,9 @@
 
 	function handleFindingClose(id: string) {
 		findings = findings.filter((finding) => finding.id !== id);
+		if (selectedFile?.path) {
+			scannedFindingsByPath.set(selectedFile.path, findings);
+		}
 		if (focusedFindingId === id) focusedFindingId = null;
 	}
 </script>
@@ -512,6 +571,9 @@
 						{scanProgress}
 						onselect={handleSelectFile}
 						onscanall={handleScanAll}
+						onauditall={handleSendAllToAudit}
+						auditAllEnabled={auditAllFindingCount > 0 && !scanning}
+						auditAllCount={auditAllFindingCount}
 						onclear={handleClearFolder}
 					/>
 				{:else}

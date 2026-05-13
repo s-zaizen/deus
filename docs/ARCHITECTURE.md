@@ -211,11 +211,13 @@ The backend workflow is report-first and intentionally evidence-bound:
 2. **Trace Validation** — validate candidates with source-to-sink,
    sanitizer/guard, sink, and reachability evidence.
 3. **Report Generation** — self-review prior outputs and produce exactly
-   one Markdown report section per scanner finding. Headings are mapped
+   one structured report object per scanner finding. Headings are mapped
    through the backend's Report ID Map as `MAKINA-001`, `MAKINA-002`,
-   etc., even when multiple findings share a CWE. Sections include
-   Vulnerability Details, Impact, Proof of Concept, Remediation,
-   Verification Notes, and Confidence.
+   etc., even when multiple findings share a CWE. The provider fills
+   fixed fields (`summary`, `vulnerability_details`, `impact`,
+   `proof_of_concept`, `remediation`, `verification_notes`, and
+   `confidence`); Rust renders those fields into the final Markdown
+   sections so section order and labels are deterministic.
 
 This shape follows three research patterns: ReAct-style staged
 reasoning/action loops, Reflexion-style self-review before final output,
@@ -229,16 +231,30 @@ Reference papers: ReAct (Yao et al., 2022), Reflexion (Shinn et al.,
 Provider calls use official Python SDKs in the ML service: `openai` for
 OpenAI Responses API calls and `anthropic` for Anthropic Messages API
 calls. Rust forwards only a single request-scoped provider call at a time
-to ML `/audit_step` and never persists the API key. In public mode,
-`/api/audit/run` is not registered at all; the public frontend shows a
-disabled-state notice instead of collecting provider keys. The report
-generation step gets at least 4000 output tokens because it must cover
-every finding. If the provider returns no final report text after
-successful triage/trace steps, Rust falls back to a deterministic
-per-finding Markdown report derived from scanner evidence. The response
-includes both raw step results and `report_markdown` for the final report
-viewer. The private/dev UI keeps keys in memory unless the user chooses
-to remember them in browser `localStorage`.
+to ML `/audit_step` and never persists the API key. The final Report
+Generation call includes a JSON Schema. The OpenAI adapter passes it as
+Responses API structured output (`text.format.type = json_schema`,
+`strict = true`); the Anthropic adapter passes the same schema as a
+forced client tool `input_schema`, which makes Claude return the report
+object as tool input. Rust parses the structured report and renders the
+canonical Markdown contract consumed by the UI/PDF exporter. In public
+mode, `/api/audit/run` is not registered at all; the public frontend
+shows a disabled-state notice instead of collecting provider keys. The
+report generation step gets at least 4000 output tokens because it must
+cover every finding. If the provider returns no parseable or complete
+final report after successful triage/trace steps, Rust falls back to a
+deterministic per-finding Markdown report derived from scanner evidence.
+The response includes rendered step results, `report_markdown`, and
+`report_sections` with the fixed structured fields. The Audit viewer and
+PDF exporter prefer `report_sections` when present, so rich layout does
+not depend on reparsing free-form Markdown. The private/dev UI keeps keys
+in memory unless the user chooses to remember them in browser
+`localStorage`.
+
+Audit report download is generated in the browser from `report_markdown`
+and scanner finding metadata with `pdfmake`. The frontend owns the PDF
+document definition and branding; no provider API key or report body is
+sent to an additional PDF service.
 
 ### ML analysis gate (hybrid, GBDT-first)
 
@@ -550,8 +566,11 @@ makina/
 │       └── lib/
 │           ├── components/ CodeEditor, FileTree, FindingCard, AuditTab, VerifyTab, KnowledgeTab …
 │           ├── audit.ts   Audit run client (Rust /api/audit/run boundary)
+│           ├── auditReport.ts shared MAKINA report section splitting / ID mapping
 │           ├── highlighter.ts  shiki singleton (vitesse-dark theme)
 │           ├── api.ts     fetch wrappers (PUBLIC_API_URL)
+│           ├── markdown.ts shared Markdown parser for preview and PDF export
+│           ├── reportPdf.ts client-side Audit PDF generation with pdfmake
 │           ├── theme.ts   shared Makina theme tokens for UI severity and branding
 │           ├── types.ts   shared TypeScript types
 │           ├── folder.ts  folder drag-and-drop utilities

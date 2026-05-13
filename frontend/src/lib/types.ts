@@ -113,4 +113,5 @@ export interface AuditStepResult {
 export interface AuditRunResponse {
   results: AuditStepResult[];
   reportMarkdown: string;
+  reportSections: import("$lib/auditReport").AuditReportSection[];
 }

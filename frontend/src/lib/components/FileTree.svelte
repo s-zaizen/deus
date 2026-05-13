@@ -9,6 +9,9 @@
 		scanProgress,
 		onselect,
 		onscanall,
+		onauditall,
+		auditAllEnabled = false,
+		auditAllCount = 0,
 		onclear
 	}: {
 		root: FileNode;
@@ -17,6 +20,9 @@
 		scanProgress: { current: number; total: number } | null;
 		onselect: (node: FileNode) => void;
 		onscanall: () => void;
+		onauditall: () => void;
+		auditAllEnabled?: boolean;
+		auditAllCount?: number;
 		onclear: () => void;
 	} = $props();
 
@@ -57,7 +63,7 @@
 		{/if}
 	</div>
 
-	<!-- Footer: Scan All -->
+	<!-- Footer: bulk actions -->
 	<div class="shrink-0 px-3 py-2 border-t" style="border-color:var(--mk-border);">
 		{#if scanning}
 			<div class="space-y-1.5">
@@ -73,18 +79,34 @@
 				</div>
 			</div>
 		{:else}
-			<button
-				onclick={onscanall}
-				disabled={totalFiles === 0}
-				class={[
-					'w-full py-1.5 rounded text-xs font-semibold transition-colors',
-					totalFiles > 0
-						? 'bg-teal-600/90 hover:bg-teal-500 text-white cursor-pointer'
-						: 'bg-[var(--mk-border)] text-gray-600 cursor-not-allowed'
-				].join(' ')}
-			>
-				Scan All ({totalFiles} files)
-			</button>
+			<div class="grid grid-cols-2 gap-2">
+				<button
+					onclick={onscanall}
+					disabled={totalFiles === 0}
+					class={[
+						'py-1.5 rounded text-xs font-semibold transition-colors',
+						totalFiles > 0
+							? 'bg-teal-600/90 hover:bg-teal-500 text-white cursor-pointer'
+							: 'bg-[var(--mk-border)] text-gray-600 cursor-not-allowed'
+					].join(' ')}
+					title={`Scan all ${totalFiles} files`}
+				>
+					Scan All
+				</button>
+				<button
+					onclick={onauditall}
+					disabled={!auditAllEnabled}
+					class={[
+						'py-1.5 rounded border text-xs font-semibold transition-colors',
+						auditAllEnabled
+							? 'border-violet-500/70 text-violet-200 hover:bg-violet-950/35 hover:border-violet-400 cursor-pointer'
+							: 'border-[var(--mk-border)] text-gray-700 cursor-not-allowed'
+					].join(' ')}
+					title={auditAllEnabled ? `Audit ${auditAllCount} findings` : 'Run Scan All first'}
+				>
+					Audit All{auditAllCount > 0 ? ` (${auditAllCount})` : ''}
+				</button>
+			</div>
 		{/if}
 	</div>
 </div>

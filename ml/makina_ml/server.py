@@ -14,6 +14,7 @@ Endpoints:
 Route handlers stay thin — heavy lifting lives in `services/`.
 """
 
+import json
 import logging
 import os
 import time
@@ -210,6 +211,7 @@ class AuditStepRequest(BaseModel):
     max_output_tokens: int = Field(default=1400, ge=128, le=8000)
     system_prompt: str = SYSTEM_PROMPT_FALLBACK
     prompt: str = Field(min_length=1)
+    response_schema: Optional[dict[str, Any]] = None
 
 
 class AuditStepResponse(BaseModel):
@@ -236,6 +238,17 @@ def _extract_anthropic_text(response: Any) -> str:
     return "\n".join(chunk for chunk in chunks if chunk).strip()
 
 
+def _extract_anthropic_tool_json(response: Any, tool_name: str) -> str:
+    for block in getattr(response, "content", []) or []:
+        if (
+            getattr(block, "type", None) == "tool_use"
+            and getattr(block, "name", None) == tool_name
+        ):
+            tool_input = getattr(block, "input", None)
+            return json.dumps(tool_input, ensure_ascii=False, separators=(",", ":"))
+    return ""
+
+
 def _sanitize_audit_error(exc: Exception, api_key: str) -> str:
     message = str(exc)
     if api_key:
@@ -251,24 +264,54 @@ def audit_step(req: AuditStepRequest) -> AuditStepResponse:
             from openai import OpenAI
 
             client = OpenAI(api_key=req.api_key)
+            kwargs: dict[str, Any] = {}
+            if req.response_schema is not None:
+                kwargs["text"] = {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "makina_audit_report",
+                        "description": "Strict Makina audit report sections keyed by MAKINA identifiers.",
+                        "strict": True,
+                        "schema": req.response_schema,
+                    }
+                }
             response = client.responses.create(
                 model=req.model,
                 instructions=req.system_prompt,
                 input=req.prompt,
                 max_output_tokens=req.max_output_tokens,
+                **kwargs,
             )
             output = _extract_openai_text(response)
         else:
             import anthropic
 
             client = anthropic.Anthropic(api_key=req.api_key)
+            tool_name = "submit_makina_audit_report"
+            kwargs = {}
+            if req.response_schema is not None:
+                kwargs = {
+                    "tools": [
+                        {
+                            "name": tool_name,
+                            "description": "Return the final Makina audit report as structured JSON.",
+                            "input_schema": req.response_schema,
+                        }
+                    ],
+                    "tool_choice": {"type": "tool", "name": tool_name},
+                }
             response = client.messages.create(
                 model=req.model,
                 max_tokens=req.max_output_tokens,
                 system=req.system_prompt,
                 messages=[{"role": "user", "content": req.prompt}],
+                **kwargs,
             )
-            output = _extract_anthropic_text(response)
+            output = (
+                _extract_anthropic_tool_json(response, tool_name)
+                if req.response_schema is not None
+                else _extract_anthropic_text(response)
+            )
     except Exception as exc:
         raise HTTPException(
             status_code=502,

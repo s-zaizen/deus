@@ -10,6 +10,12 @@
 	import MarkdownReport from '$lib/components/MarkdownReport.svelte';
 	import { PUBLIC_MODE } from '$lib/flags';
 	import { severityTone } from '$lib/theme';
+	import {
+		mapAuditReportSections,
+		reportIdForIndex,
+		type AuditReportSection
+	} from '$lib/auditReport';
+	import { downloadAuditPdf } from '$lib/reportPdf';
 
 	let { auditCase }: { auditCase: AuditCase | null } = $props();
 
@@ -46,6 +52,8 @@
 	let runError = $state<string | null>(null);
 	let selectedFindingId = $state<string | null>(null);
 	let lastAuditFindingIds = $state<string[]>([]);
+	let structuredReportSections = $state<AuditReportSection[]>([]);
+	let pdfDownloading = $state(false);
 
 	const currentApiKey = $derived(PUBLIC_MODE ? '' : provider === 'openai' ? openaiKey : anthropicKey);
 	const currentModel = $derived(models[provider]);
@@ -67,43 +75,18 @@
 			: 'No scan'
 	);
 
-	interface ReportSection {
-		id: string;
-		title: string;
-		source: string;
-		findingId: string | null;
-	}
-
-	function reportIdForIndex(index: number) {
-		return `MAKINA-${String(index + 1).padStart(3, '0')}`;
-	}
-
-	function splitReportMarkdown(markdown: string): Omit<ReportSection, 'findingId'>[] {
-		const source = markdown.trim();
-		if (!source) return [];
-
-		const matches = [...source.matchAll(/^#\s+(MAKINA-\d{3})(?::\s*(.*?))?\s*$/gm)];
-		if (matches.length === 0) {
-			return [{ id: 'MAKINA-001', title: 'Audit Report', source }];
-		}
-
-		return matches.map((match, index) => {
-			const start = match.index ?? 0;
-			const headerEnd = start + match[0].length;
-			const nextStart = matches[index + 1]?.index ?? source.length;
-			return {
-				id: match[1],
-				title: match[2]?.trim() || 'Audit Report',
-				source: source.slice(headerEnd, nextStart).trim()
-			};
-		});
-	}
-
+	const markdownReportSections = $derived(
+		mapAuditReportSections(
+			reportMarkdown,
+			lastAuditFindingIds,
+			auditCase?.findings.map((finding) => finding.id) ?? []
+		)
+	);
 	const reportSections = $derived(
-		splitReportMarkdown(reportMarkdown).map((section, index) => ({
-			...section,
-			findingId: lastAuditFindingIds[index] ?? auditCase?.findings[index]?.id ?? null
-		}))
+		structuredReportSections.length > 0 ? structuredReportSections : markdownReportSections
+	);
+	const canDownloadPdf = $derived(
+		Boolean(auditCase && reportMarkdown.trim() && reportSections.length > 0 && !running && !pdfDownloading)
 	);
 
 	onMount(() => {
@@ -161,10 +144,12 @@
 		activeAuditCaseId = nextAuditCaseId;
 		selectedFindingId = null;
 		lastAuditFindingIds = [];
+		structuredReportSections = [];
 		results = [];
 		reportMarkdown = '';
 		stepsExpanded = false;
 		runError = null;
+		pdfDownloading = false;
 	});
 
 	async function runAudit(scope: 'current' | 'all' = 'current') {
@@ -183,6 +168,7 @@
 		runError = null;
 		results = [];
 		reportMarkdown = '';
+		structuredReportSections = [];
 		stepsExpanded = false;
 		lastAuditFindingIds = findings.map((finding) => finding.id);
 		try {
@@ -196,12 +182,31 @@
 			});
 			results = response.results;
 			reportMarkdown = response.reportMarkdown;
+			structuredReportSections = response.reportSections;
 			await tick();
 			if (scope === 'current' && selectedFindingId) scrollToFindingReport(selectedFindingId);
 		} catch (err) {
 			runError = err instanceof Error ? err.message : String(err);
 		} finally {
 			running = false;
+		}
+	}
+
+	async function downloadPdf() {
+		if (!auditCase || !canDownloadPdf) return;
+		pdfDownloading = true;
+		runError = null;
+		try {
+			await downloadAuditPdf({
+				auditCase,
+				reportMarkdown,
+				findingIds: lastAuditFindingIds,
+				reportSections: structuredReportSections
+			});
+		} catch (err) {
+			runError = err instanceof Error ? err.message : String(err);
+		} finally {
+			pdfDownloading = false;
 		}
 	}
 
@@ -233,7 +238,7 @@
 		return reportSections.findIndex((section) => section.findingId === findingId);
 	}
 
-	function findingForSection(section: ReportSection) {
+	function findingForSection(section: AuditReportSection) {
 		if (!section.findingId) return null;
 		return auditCase?.findings.find((finding) => finding.id === section.findingId) ?? null;
 	}
@@ -252,7 +257,7 @@
 		return value.replace(/[^A-Za-z0-9_-]/g, '-');
 	}
 
-	function reportElementId(section: ReportSection, index: number) {
+	function reportElementId(section: AuditReportSection, index: number) {
 		return section.findingId ? `audit-report-${domId(section.findingId)}` : `audit-report-${index}`;
 	}
 
@@ -282,7 +287,7 @@
 		].join(' ');
 	}
 
-	function reportCardClass(section: ReportSection, finding: Finding | null) {
+	function reportCardClass(section: AuditReportSection, finding: Finding | null) {
 		const selected = section.findingId !== null && section.findingId === selectedFindingId;
 		const tone = severityTone(finding?.severity);
 		return [
@@ -301,7 +306,7 @@
 	}
 </script>
 
-<div class="flex flex-1 min-h-0 flex-col bg-[var(--mk-bg)] lg:flex-row">
+<div class="flex flex-1 min-h-0 min-w-0 overflow-hidden flex-col bg-[var(--mk-bg)] lg:flex-row">
 	<!-- Settings sidebar -->
 	<aside class="flex max-h-[45vh] w-full shrink-0 flex-col border-b border-[var(--mk-border)] bg-[var(--mk-bg-panel)] lg:max-h-none lg:w-80 lg:border-b-0 lg:border-r">
 		<!-- Header -->
@@ -390,10 +395,10 @@
 	</aside>
 
 	<!-- Main area -->
-	<main class="flex flex-1 min-w-0 flex-col min-h-0">
+	<main class="flex flex-1 min-w-0 flex-col min-h-0 overflow-hidden">
 		<!-- Header -->
-		<div class="flex h-11 shrink-0 items-center justify-between border-b border-[var(--mk-border)] px-4">
-			<div class="flex items-center gap-3 min-w-0 overflow-hidden">
+		<div class="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--mk-border)] px-4 py-2">
+			<div class="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
 				<h1 class="text-sm font-semibold text-[var(--mk-text)] shrink-0">LLM Audit</h1>
 				{#if auditCase}
 					<div class="hidden sm:flex items-center gap-2 text-xs text-gray-500 min-w-0">
@@ -412,7 +417,34 @@
 				{/if}
 			</div>
 
-			<div class="flex items-center gap-2 shrink-0">
+			<div class="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
+				{#if reportMarkdown}
+					<button
+						onclick={downloadPdf}
+						disabled={!canDownloadPdf}
+						class={[
+							'inline-flex items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors',
+							canDownloadPdf
+								? 'border-[var(--mk-border-strong)] bg-[var(--mk-bg-elevated)] text-[var(--mk-text-soft)] hover:border-[var(--mk-copper)] hover:bg-[var(--mk-bg-hover)] cursor-pointer'
+								: 'border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] text-gray-700 cursor-not-allowed'
+						].join(' ')}
+						title="Download audit report as PDF"
+					>
+						{#if pdfDownloading}
+							<svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+								<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+								<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+							</svg>
+							PDF
+						{:else}
+							<svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M12 3v10.5m0 0 3.5-3.5M12 13.5 8.5 10M5 17.5v1.25A2.25 2.25 0 0 0 7.25 21h9.5A2.25 2.25 0 0 0 19 18.75V17.5" />
+							</svg>
+							PDF
+						{/if}
+					</button>
+				{/if}
+
 				{#if selectedFinding}
 					<button
 						onclick={() => runAudit('all')}
@@ -475,7 +507,7 @@
 				</div>
 			</div>
 		{:else}
-			<div class="flex flex-1 min-h-0 flex-col xl:flex-row">
+			<div class="flex flex-1 min-h-0 min-w-0 flex-col xl:flex-row overflow-x-hidden">
 				<!-- Scanner Findings list -->
 				<section class="flex shrink-0 flex-col border-b border-[var(--mk-border)] bg-[var(--mk-bg-panel)] xl:h-auto xl:w-80 xl:border-b-0 xl:border-r">
 					<div class="flex h-10 shrink-0 items-center justify-between gap-3 border-b border-[var(--mk-border)] px-4">
@@ -501,17 +533,19 @@
 								class={findingCardClass(finding)}
 							>
 								<div class="mb-2 flex flex-wrap items-center gap-2">
-									<span class={['rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase shrink-0', severityTone(finding.severity).badge].join(' ')}>
-										{finding.severity}
+									<span class="rounded border border-violet-900/50 bg-violet-950/40 px-1.5 py-0.5 font-mono text-[10px] font-bold text-violet-200 shrink-0">
+										{reportBadgeForFinding(finding, i)}
 									</span>
-									<span class="font-mono text-[10px] text-gray-500 shrink-0">{finding.rule_id}</span>
 									{#if finding.cwe}
 										<span class="rounded bg-gray-800 px-1.5 py-0.5 font-mono text-[10px] text-gray-500 shrink-0">
 											{finding.cwe}
 										</span>
 									{/if}
-									<span class="rounded bg-violet-950/40 border border-violet-900/50 px-1.5 py-0.5 font-mono text-[10px] text-violet-200 shrink-0">
-										{reportBadgeForFinding(finding, i)}
+									<span class={['rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase shrink-0', severityTone(finding.severity).badge].join(' ')}>
+										{finding.severity}
+									</span>
+									<span class="font-mono text-[10px] text-gray-500 shrink-0">
+										{finding.rule_id}
 									</span>
 									<span class="ml-auto font-mono text-[10px] text-gray-600 shrink-0">
 										L{finding.line_start}
@@ -524,7 +558,7 @@
 				</section>
 
 				<!-- Report area -->
-				<section class="flex-1 overflow-y-auto p-4">
+				<section class="flex-1 min-w-0 overflow-x-hidden overflow-y-auto p-4">
 					{#if runError}
 						<div class="mb-4 rounded-lg border border-red-800 bg-red-950/40 p-3 text-xs text-red-300">
 							{runError}
@@ -567,33 +601,37 @@
 											class={reportCardClass(section, sectionFinding)}
 										>
 											<div class={['h-1', sectionFinding ? sectionTone.track : 'bg-gray-700'].join(' ')}></div>
-											<div class="border-b border-[var(--mk-border)] bg-[var(--mk-bg-panel)] px-4 py-3">
-												<div class="flex items-center gap-2 min-w-0">
-													<span class="font-mono text-xs font-bold text-violet-200 shrink-0">{section.id}</span>
-													<span class="min-w-0 text-sm font-semibold text-gray-100 truncate">{section.title}</span>
+											<div class="border-b border-[var(--mk-border)] bg-[var(--mk-bg-panel)] px-5 py-5">
+												<div class="flex items-start gap-3 min-w-0">
+													<span class="shrink-0 rounded border border-violet-900/60 bg-violet-950/40 px-2 py-1 font-mono text-sm font-bold text-violet-100 leading-none">
+														{section.id}
+													</span>
+													<h4 class="min-w-0 flex-1 text-base font-semibold text-gray-100 break-words leading-snug">
+														{section.title}
+													</h4>
 													{#if section.findingId}
 														<button
 															onclick={() => section.findingId && selectFinding(section.findingId)}
-															class="ml-auto text-[10px] font-semibold text-gray-500 hover:text-gray-300 transition-colors cursor-pointer shrink-0"
+															class="shrink-0 text-[10px] font-semibold text-gray-500 hover:text-gray-300 transition-colors cursor-pointer leading-snug"
 														>
 															Focus finding
 														</button>
 													{/if}
 												</div>
 												{#if sectionFinding}
-													<div class="mt-2 flex flex-wrap items-center gap-2">
-														<span class={['rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase shrink-0', sectionTone.badge].join(' ')}>
-															Impact {sectionFinding.severity}
-														</span>
-														<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-1.5 py-0.5 font-mono text-[10px] text-gray-400 shrink-0">
-															{sectionFinding.rule_id}
-														</span>
+													<div class="mt-3 flex flex-wrap items-center gap-2">
 														{#if sectionFinding.cwe}
-															<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-1.5 py-0.5 font-mono text-[10px] text-gray-400 shrink-0">
+															<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 py-0.5 font-mono text-[10px] text-gray-400 shrink-0">
 																{sectionFinding.cwe}
 															</span>
 														{/if}
-														<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-1.5 py-0.5 font-mono text-[10px] text-gray-500 shrink-0">
+														<span class={['rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide shrink-0', sectionTone.badge].join(' ')}>
+															{sectionFinding.severity}
+														</span>
+														<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 py-0.5 font-mono text-[10px] text-gray-400 shrink-0">
+															{sectionFinding.rule_id}
+														</span>
+														<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 py-0.5 font-mono text-[10px] text-gray-500 shrink-0">
 															L{sectionFinding.line_start}
 														</span>
 													</div>
