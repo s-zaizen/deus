@@ -82,7 +82,9 @@ def test_has_group_column_absent(feedback_db_no_group: Path):
 # ── _load_dataset — round-trips bytes / labels / group_key ───────────────────
 
 
-def _row(label: str, group_key: str | None, vec_seed: int) -> tuple[bytes, str, str | None]:
+def _row(
+    label: str, group_key: str | None, vec_seed: int
+) -> tuple[bytes, str, str | None]:
     fv = np.full(768, vec_seed, dtype="<f4").tobytes()
     return fv, label, group_key
 
@@ -129,6 +131,55 @@ def test_load_dataset_falls_back_when_group_column_missing(feedback_db_no_group:
     rows = training._load_dataset(feedback_db_no_group)
     assert {r[1] for r in rows} == {"tp", "fp"}
     assert all(r[2] is None for r in rows), "missing column → all groups must be None"
+
+
+def test_load_dataset_uses_training_examples_view(feedback_db: Path):
+    fv = np.full(768, 0.5, dtype="<f4").tobytes()
+    conn = sqlite3.connect(str(feedback_db))
+    conn.execute(
+        """
+        CREATE VIEW training_examples AS
+            SELECT id, feature_vector, label, group_key
+            FROM findings
+            WHERE label IN ('tp','fp') AND feature_vector IS NOT NULL
+        """
+    )
+    conn.executemany(
+        "INSERT INTO findings (id, label, feature_vector, group_key) VALUES (?, ?, ?, ?)",
+        [
+            ("trainable", "tp", fv, "CVE-1"),
+            ("unlabeled", None, fv, "CVE-1"),
+            ("missing-vector", "fp", None, "CVE-1"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    rows = training._load_dataset(feedback_db)
+
+    assert len(rows) == 1
+    assert rows[0][1] == "tp"
+    assert rows[0][2] == "CVE-1"
+
+
+def test_balanced_sample_weights_upweights_minority_class():
+    weights = training._balanced_sample_weights(np.array([1, 1, 1, 0]))
+    assert weights[-1] > weights[0]
+    assert weights.sum() == pytest.approx(4.0)
+
+
+def test_dataset_hash_is_stable_for_same_rows():
+    embeddings = np.array(
+        [np.full(768, 0.1, dtype=np.float32), np.full(768, 0.2, dtype=np.float32)]
+    )
+    labels = ["tp", "fp"]
+    groups = ["CVE-1", "CVE-1"]
+
+    first = training._dataset_hash(embeddings, labels, groups)
+    second = training._dataset_hash(embeddings, labels, groups)
+
+    assert first == second
+    assert len(first) == 64
 
 
 # ── read_metrics — JSON round trip and missing-file path ─────────────────────

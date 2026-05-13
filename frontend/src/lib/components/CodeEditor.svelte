@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
 	import type * as MonacoType from 'monaco-editor/esm/vs/editor/editor.api';
+	import { severityTone } from '$lib/theme';
 	import type { Finding, Language } from '$lib/types';
 
 	let {
@@ -33,10 +34,6 @@
 		auto: 'txt', python: 'py', rust: 'rs', javascript: 'js',
 		typescript: 'ts', go: 'go', java: 'java', ruby: 'rb', c: 'c', cpp: 'cpp'
 	};
-	const SEV_RULER: Record<string, string> = {
-		critical: '#dc2626', high: '#ea580c', medium: '#ca8a04', low: '#2563eb'
-	};
-
 	let containerEl: HTMLDivElement;
 	let dragging = $state(false);
 	let editor = $state<MonacoType.editor.IStandaloneCodeEditor | null>(null);
@@ -67,7 +64,7 @@
 				{ token: 'entity.name.type', foreground: '67e8f9' },
 				{ token: 'entity.name.function', foreground: 'fde68a' },
 				{ token: 'support.function', foreground: 'fde68a' },
-				{ token: 'variable', foreground: 'e2e8f0' },
+				{ token: 'variable', foreground: 'f4f1e8' },
 				{ token: 'variable.predefined', foreground: 'f87171' },
 				{ token: 'constant', foreground: 'fb923c' },
 				{ token: 'constant.language', foreground: 'c084fc' },
@@ -80,33 +77,33 @@
 			],
 			colors: {
 				'editor.background': '#00000000',
-				'editor.foreground': '#e2e8f0',
-				'editor.lineHighlightBackground': '#0f1828',
-				'editor.lineHighlightBorder': '#1a2540',
-				'editor.selectionBackground': '#1e40af55',
-				'editor.selectionHighlightBackground': '#1e40af25',
-				'editor.inactiveSelectionBackground': '#1e40af20',
-				'editorCursor.foreground': '#34d399',
-				'editorLineNumber.foreground': '#2d3748',
-				'editorLineNumber.activeForeground': '#6b7280',
+				'editor.foreground': '#f4f1e8',
+				'editor.lineHighlightBackground': '#11172a',
+				'editor.lineHighlightBorder': '#2a2450',
+				'editor.selectionBackground': '#4f46e555',
+				'editor.selectionHighlightBackground': '#8b5cf620',
+				'editor.inactiveSelectionBackground': '#4f46e520',
+				'editorCursor.foreground': '#14b8a6',
+				'editorLineNumber.foreground': '#30384f',
+				'editorLineNumber.activeForeground': '#d8c7aa',
 				'editorGutter.background': '#060a12',
 				'editorRuler.foreground': '#1f2937',
 				'editorIndentGuide.background1': '#1a2035',
-				'editorIndentGuide.activeBackground1': '#2d3f5f',
-				'editorBracketMatch.background': '#0ea5e920',
-				'editorBracketMatch.border': '#0ea5e9',
+				'editorIndentGuide.activeBackground1': '#3a315f',
+				'editorBracketMatch.background': '#8b5cf620',
+				'editorBracketMatch.border': '#8b5cf6',
 				'editorError.foreground': '#f87171',
 				'editorWarning.foreground': '#fb923c',
-				'editorInfo.foreground': '#60a5fa',
+				'editorInfo.foreground': '#2dd4bf',
 				'editorOverviewRuler.border': '#00000000',
 				'editorOverviewRuler.background': '#060a12',
-				'scrollbarSlider.background': '#1e293766',
-				'scrollbarSlider.hoverBackground': '#334155aa',
-				'scrollbarSlider.activeBackground': '#475569',
+				'scrollbarSlider.background': '#2b335066',
+				'scrollbarSlider.hoverBackground': '#8b5cf688',
+				'scrollbarSlider.activeBackground': '#a78bfa',
 				'minimap.background': '#060a12',
-				'editorWidget.background': '#0d1117',
-				'editorWidget.border': '#1f2937',
-				'focusBorder': '#3b82f680'
+				'editorWidget.background': '#0e1424',
+				'editorWidget.border': '#2b3350',
+				'focusBorder': '#8b5cf680'
 			}
 		});
 	}
@@ -239,6 +236,7 @@
 		const decs: MonacoType.editor.IModelDeltaDecoration[] = findings.map((f) => {
 			const sev = f.severity;
 			const isMl = f.source === 'ml';
+			const tone = severityTone(sev);
 			return {
 				range: new monaco.Range(f.line_start, 1, f.line_end, 1),
 				options: {
@@ -246,7 +244,7 @@
 					className: isMl ? 'finding-line-ml' : `finding-line-${sev}`,
 					linesDecorationsClassName: isMl ? 'finding-border-ml' : undefined,
 					glyphMarginClassName: isMl ? 'finding-glyph-ml' : `finding-glyph-${sev}`,
-					overviewRulerColor: isMl ? '#8b5cf6' : (SEV_RULER[sev] ?? SEV_RULER.low),
+					overviewRulerColor: isMl ? '#8b5cf6' : tone.ruler,
 					overviewRulerLane: monaco.editor.OverviewRulerLane.Right
 				}
 			};
@@ -310,7 +308,7 @@
 
 <div
 	class="flex flex-col h-full relative"
-	style="background:#0b1120;"
+	style="background:var(--mk-bg-code);"
 	ondragenter={handleDragEnter}
 	ondragover={handleDragOver}
 	ondragleave={handleDragLeave}
@@ -322,24 +320,24 @@
 	{#if dragging}
 		<div
 			class="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded"
-			style="background:#0b1120ee; border:2px dashed #4f46e5;"
+			style="background:rgba(11,17,32,0.94); border:2px dashed var(--mk-brand);"
 		>
-			<svg class="w-10 h-10 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+			<svg class="w-10 h-10 text-violet-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
 				<path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
 			</svg>
-			<span class="text-sm text-indigo-300 font-medium">Drop folder or file</span>
+			<span class="text-sm text-violet-200 font-medium">Drop folder or file</span>
 		</div>
 	{/if}
 
 	<!-- Title bar -->
 	<div
-		class="flex items-center gap-3 px-4 shrink-0 border-b border-gray-800/80"
+		class="flex items-center gap-3 px-4 shrink-0 border-b border-[var(--mk-border)]"
 		style="height:44px;"
 	>
-		<svg class="w-4 h-4 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+		<svg class="w-4 h-4 text-[var(--mk-text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
 			<path stroke-linecap="round" stroke-linejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />
 		</svg>
-		<span class="font-mono text-sm text-gray-400">
+		<span class="font-mono text-sm text-[var(--mk-text-soft)]">
 			{filename ?? `source.${EXT_MAP[language]}`}
 		</span>
 		<div class="ml-auto flex items-center gap-3 text-xs text-gray-600">
@@ -360,7 +358,7 @@
 	:global(.finding-line-medium)   { background: rgba(234,179,8,0.10) !important; }
 	:global(.finding-line-low)      { background: rgba(96,165,250,0.10) !important; }
 	:global(.finding-line-ml)       { background: rgba(139,92,246,0.18) !important; }
-	:global(.finding-line-focused)  { background: rgba(79,70,229,0.15) !important; }
+	:global(.finding-line-focused)  { background: rgba(139,92,246,0.16) !important; }
 
 	:global(.finding-border-ml) { box-shadow: inset 2px 0 0 #8b5cf6; }
 
@@ -369,7 +367,7 @@
 	:global(.finding-glyph-medium)::before   { content: '●'; color: #ca8a04; font-size: 10px; }
 	:global(.finding-glyph-low)::before      { content: '●'; color: #2563eb; font-size: 10px; }
 	:global(.finding-glyph-ml)::before       { content: '◆'; color: #a78bfa; font-size: 10px; }
-	:global(.finding-glyph-focused)::before  { content: '▶'; color: #818cf8; font-size: 10px; }
+	:global(.finding-glyph-focused)::before  { content: '▶'; color: var(--mk-text-soft); font-size: 10px; }
 
 	:global(.shiki-snippet pre) {
 		margin: 0;

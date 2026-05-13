@@ -56,6 +56,8 @@ pub async fn manual(
         is_uncertain: false,
         cwe: req.cwe,
         source: "manual".to_string(),
+        trace_graph: None,
+        exploration_plan: None,
     };
 
     let _ = store::save_finding(

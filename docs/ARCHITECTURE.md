@@ -46,12 +46,13 @@ the editor stays lazy-loaded instead of becoming one oversized bundle.
 ```
 ┌─────────────────────────────────────────────────────┐
 │  Browser (SvelteKit)                                │
-│  Scan tab → Audit tab → Verify tab → Knowledge tab  │
+│  Scan tab → Graph tab → Audit tab → Verify tab      │
+│  Knowledge tab → Model tab                          │
 └────────────────────┬────────────────────────────────┘
                      │ HTTP
 ┌────────────────────▼────────────────────────────────┐
 │  Rust core  (axum)            :7373                 │
-│  - /api/scan                                        │
+│  - /api/scan, /api/scan/project                     │
 │  - /api/audit/run     (POST — server LLM workflow)  │
 │  - /api/feedback                                    │
 │  - /api/verify/queue  (GET / POST / DELETE)         │
@@ -140,9 +141,9 @@ ephemeral — there is no persistent volume, so `feedback.db` /
 endpoint, so the lack of persistence is by design: the model ships as
 a frozen artefact baked into the image. It also disables hosted LLM
 Audit execution so public users cannot send OpenAI or Anthropic API
-keys to the makina.sh backend. `/api/scan` still runs the detectors and
-frozen-model scoring in public mode, but it does not persist unlabeled
-findings to `feedback.db`.
+keys to the makina.sh backend. `/api/scan` and `/api/scan/project` still
+run the detectors and frozen-model scoring in public mode, but they do
+not persist unlabeled findings to `feedback.db`.
 
 ## Scan Pipeline
 
@@ -190,6 +191,43 @@ skips that unlabeled persistence path.
 CodeBERT embedding calls are internally chunked (`MAKINA_EMBED_BATCH_SIZE`,
 default 32) to keep memory bounded on large files and folder scans.
 
+Taint findings may also carry a `trace_graph` object in the API response.
+The graph is a compact node/edge representation of the evidence path
+(`source`, intermediate `function` nodes, `sink`, and the reported
+`finding`). Rust preserves this contract through `/api/scan` and remaps
+node file/line metadata for `/api/scan/project`, so the frontend can show
+an IDA-style flow preview and later RAG/export code can consume the same
+structured evidence instead of reparsing Markdown.
+
+Taint findings can also include an `exploration_plan`. This is not a
+runtime proof and does not execute code; it is a structured validation seed
+derived from the same source-to-sink path. The plan records an objective,
+ordered steps, feedback signals, and required evidence that Audit can use
+to keep report prose strict. It also gives future fuzzing, symbolic, RL, or
+trace-collection engines a stable place to attach runtime evidence without
+changing the core `Finding` identity.
+
+The Graph tab consumes `trace_graph` directly. It is a reader of scanner
+evidence, not a second detector: if a finding has no trace graph, the tab
+does not synthesize one. This keeps visualization, Audit, PDF export, and
+future RAG consumers aligned around the same API evidence contract.
+
+`POST /api/scan/project` is the multi-file variant used by the Scan All
+UI. The frontend sends every dropped file with its detected language.
+Rust groups files by language, concatenates each group with language-valid
+file markers, runs the same detector pipeline once per group, and maps
+resulting line ranges back to the original file path. This lets the taint
+engine and call-graph embedding context see cross-function flows that span
+files in the same language group while preserving per-file UI highlighting.
+When a source-to-sink range crosses files, the finding is assigned to the
+sink file and its message records the source path.
+
+SQL sink detection has a conservative safe-sink guard for common
+parameterized calls such as Python DB-API `execute("... ?", (value,))`,
+JavaScript `db.query("... ?", [value])`, and Go
+`db.Query("... ?", value)`. Unknown SQL call shapes remain reportable so
+Audit can validate them.
+
 ## LLM Audit Workflow
 
 The Scan tab can hand the current scan result to the Audit tab instead
@@ -209,13 +247,19 @@ The backend workflow is report-first and intentionally evidence-bound:
 1. **Evidence Triage** — group scanner findings into reportable
    candidates, likely false positives, and needs-review items.
 2. **Trace Validation** — validate candidates with source-to-sink,
-   sanitizer/guard, sink, and reachability evidence.
+   sanitizer/guard, sink, and reachability evidence. When a finding
+   carries `exploration_plan`, the workflow uses its ordered steps,
+   feedback signals, and required evidence as validation guidance, but
+   still treats each item as a hypothesis until the submitted code or
+   runtime evidence supports it.
 3. **Report Generation** — self-review prior outputs and produce exactly
-   one Markdown report section per scanner finding. Headings are mapped
+   one structured report object per scanner finding. Headings are mapped
    through the backend's Report ID Map as `MAKINA-001`, `MAKINA-002`,
-   etc., even when multiple findings share a CWE. Sections include
-   Vulnerability Details, Impact, Proof of Concept, Remediation,
-   Verification Notes, and Confidence.
+   etc., even when multiple findings share a CWE. The provider fills
+   fixed fields (`summary`, `vulnerability_details`, `impact`,
+   `proof_of_concept`, `remediation`, `verification_notes`, and
+   `confidence`); Rust renders those fields into the final Markdown
+   sections so section order and labels are deterministic.
 
 This shape follows three research patterns: ReAct-style staged
 reasoning/action loops, Reflexion-style self-review before final output,
@@ -226,19 +270,39 @@ Reference papers: ReAct (Yao et al., 2022), Reflexion (Shinn et al.,
 2023), DLAP (Yang et al., 2024), and TaintCheck / Dynamic Taint Analysis
 (Newsome and Song, NDSS 2005).
 
+The prompt context intentionally sends compact finding summaries rather
+than raw provider-facing UI state. Each summary includes scanner metadata,
+the focused code snippet, and the optional `exploration_plan`; the full
+`trace_graph` remains available to the UI and future machine consumers
+without bloating every LLM call.
+
 Provider calls use official Python SDKs in the ML service: `openai` for
 OpenAI Responses API calls and `anthropic` for Anthropic Messages API
 calls. Rust forwards only a single request-scoped provider call at a time
-to ML `/audit_step` and never persists the API key. In public mode,
-`/api/audit/run` is not registered at all; the public frontend shows a
-disabled-state notice instead of collecting provider keys. The report
-generation step gets at least 4000 output tokens because it must cover
-every finding. If the provider returns no final report text after
-successful triage/trace steps, Rust falls back to a deterministic
-per-finding Markdown report derived from scanner evidence. The response
-includes both raw step results and `report_markdown` for the final report
-viewer. The private/dev UI keeps keys in memory unless the user chooses
-to remember them in browser `localStorage`.
+to ML `/audit_step` and never persists the API key. The final Report
+Generation call includes a JSON Schema. The OpenAI adapter passes it as
+Responses API structured output (`text.format.type = json_schema`,
+`strict = true`); the Anthropic adapter passes the same schema as a
+forced client tool `input_schema`, which makes Claude return the report
+object as tool input. Rust parses the structured report and renders the
+canonical Markdown contract consumed by the UI/PDF exporter. In public
+mode, `/api/audit/run` is not registered at all; the public frontend
+shows a disabled-state notice instead of collecting provider keys. The
+report generation step gets at least 4000 output tokens because it must
+cover every finding. If the provider returns no parseable or complete
+final report after successful triage/trace steps, Rust falls back to a
+deterministic per-finding Markdown report derived from scanner evidence.
+The response includes rendered step results, `report_markdown`, and
+`report_sections` with the fixed structured fields. The Audit viewer and
+PDF exporter prefer `report_sections` when present, so rich layout does
+not depend on reparsing free-form Markdown. The private/dev UI keeps keys
+in memory unless the user chooses to remember them in browser
+`localStorage`.
+
+Audit report download is generated in the browser from `report_markdown`
+and scanner finding metadata with `pdfmake`. The frontend owns the PDF
+document definition and branding; no provider API key or report body is
+sent to an additional PDF service.
 
 ### ML analysis gate (hybrid, GBDT-first)
 
@@ -296,9 +360,9 @@ Rust core: saves labels to feedback.db, moves case to knowledge.db
   ↓
 Rust core calls POST /train (fire-and-forget)
   ↓
-ML service retrains GBDT on ALL accumulated (embedding, label) pairs
+ML service retrains GBDT on ALL accumulated training_examples rows
   ↓
-New model.json written to ~/.makina/model.json
+New model.json + metrics.json written to ~/.makina/
   ↓
 Next scan uses updated GBDT confidence scores
 ```
@@ -308,6 +372,20 @@ This is intentional: with small datasets full retraining is cheap (<1s)
 and avoids incremental drift. After each retrain the analyzer's in-memory
 pattern index is invalidated (`analyzer.reset_index()`) so the next scan
 picks up any newly added CWE categories.
+
+The current label remains on `findings.label` for fast reads, while every
+human label mutation appends a row to `label_events`. The trainer reads the
+`training_examples` view, which exposes only rows with a valid TP/FP label
+and a non-null 768-dimensional embedding. This keeps future non-training
+states such as closed or needs-review cases out of the GBDT without changing
+the public Verify workflow.
+
+Each successful retrain writes a deterministic `dataset_hash`, short
+`run_id`, split metadata, class-balanced weighting mode, skipped-vector
+count, and group statistics to both `metrics.json` and `training_runs`.
+Class-balanced sample weights are applied during validation and the final
+full-dataset fit so heavily imbalanced local feedback does not drown out the
+minority class.
 
 ### Why the labeled index is not the primary matcher
 
@@ -420,9 +498,11 @@ samples.jsonl → flatten ranges → call-graph snippets
 ```
 
 The route-driven `train(db_path, ...)` is now a thin wrapper that
-reads embeddings from `feedback.db` and delegates to
-`train_from_arrays(embeddings, labels, groups, ...)` — both paths
-produce byte-compatible model artefacts.
+reads embeddings from `feedback.db` via `training_examples` and delegates
+to `train_from_arrays(embeddings, labels, groups, ...)` — both paths
+produce byte-compatible model artefacts. Route-driven training also records
+the finished run in `training_runs` so the Model tab and later model
+promotion checks can tie a model artefact back to the exact dataset hash.
 
 End-to-end on the v1.0.8 corpus (~14 k samples / ~19 k findings):
 
@@ -485,6 +565,30 @@ confidence REAL
 label TEXT                 -- 'tp' | 'fp' (NULL until verified)
 labeled_at TEXT            -- ISO-8601
 created_at TEXT
+group_key TEXT              -- CVE/import group for leak-free validation splits
+
+-- label_events: append-only human label history
+event_id INTEGER PRIMARY KEY AUTOINCREMENT
+finding_id TEXT             -- findings.id
+label TEXT                  -- 'tp' | 'fp' | 'closed' | 'needs_review'
+source TEXT                 -- 'human' by default
+reason TEXT
+created_at TEXT
+
+-- training_examples: trainer-facing view over current trainable labels
+-- SELECT * FROM findings WHERE label IN ('tp','fp') AND feature_vector IS NOT NULL
+
+-- training_runs: one row per successful route-driven retrain
+run_id TEXT PRIMARY KEY
+trained_at TEXT
+samples INTEGER
+tp INTEGER
+fp INTEGER
+dataset_hash TEXT
+split TEXT
+model_path TEXT
+metrics_json TEXT           -- full metrics.json payload
+created_at TEXT
 
 -- verify.db: pending human review queue
 -- verify_queue: cases awaiting labeling
@@ -517,7 +621,7 @@ makina/
 │       │   ├── mod.rs       Router::new() wiring features::* into routes
 │       │   └── models.rs    request/response types (Finding, Scan*, …)
 │       ├── features/        one module per user-visible feature
-│       │   ├── scan/        POST /api/scan — semgrep + analyze + taint
+│       │   ├── scan/        POST /api/scan and /api/scan/project
 │       │   ├── labels/      POST /api/feedback — TP/FP toggle on a finding
 │       │   ├── findings/    POST /api/findings/manual — bulk_import seed
 │       │   ├── verify/      GET/POST/DELETE /api/verify/queue
@@ -550,11 +654,17 @@ makina/
 │       └── lib/
 │           ├── components/ CodeEditor, FileTree, FindingCard, AuditTab, VerifyTab, KnowledgeTab …
 │           ├── audit.ts   Audit run client (Rust /api/audit/run boundary)
+│           ├── auditReport.ts shared MAKINA report section splitting / ID mapping
 │           ├── highlighter.ts  shiki singleton (vitesse-dark theme)
 │           ├── api.ts     fetch wrappers (PUBLIC_API_URL)
+│           ├── markdown.ts shared Markdown parser for preview and PDF export
+│           ├── reportPdf.ts client-side Audit PDF generation with pdfmake
+│           ├── theme.ts   shared Makina theme tokens for UI severity and branding
 │           ├── types.ts   shared TypeScript types
 │           ├── folder.ts  folder drag-and-drop utilities
 │           └── placeholders.ts  per-language sample snippets for the Scan tab
+├── samples/vulnerable-code/
+│                         Intentionally vulnerable local scanner fixtures
 ├── third_party/           External assets (not vendored)
 │   └── datasets/          Training datasets (fetched via per-dir fetch.sh)
 │       └── cvefixes/      CVEfixes — CC BY 4.0, see README.md

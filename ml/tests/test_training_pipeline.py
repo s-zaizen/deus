@@ -56,7 +56,9 @@ def test_train_single_class_returns_skip(feedback_db: Path, tmp_path: Path):
     conn.commit()
     conn.close()
 
-    out = training.train(feedback_db, tmp_path / "model.json", tmp_path / "metrics.json")
+    out = training.train(
+        feedback_db, tmp_path / "model.json", tmp_path / "metrics.json"
+    )
     assert out["ok"] is False
     assert "both TP and FP" in out["reason"]
 
@@ -79,10 +81,24 @@ def test_train_full_pipeline_with_group_split(feedback_db: Path, tmp_path: Path)
     assert persisted["split"] == "80/20 group (CVE-aware)"
     assert persisted["tp"] == 20
     assert persisted["fp"] == 20
+    assert persisted["class_weighting"] == "balanced"
+    assert persisted["group_count"] == 20
+    assert persisted["grouped_samples"] == 40
+    assert persisted["solo_samples"] == 0
+    assert persisted["skipped_invalid_vectors"] == 0
+    assert len(persisted["dataset_hash"]) == 64
+    assert len(persisted["run_id"]) == 16
     assert 0.0 <= persisted["val_accuracy"] <= 1.0
 
+    conn = sqlite3.connect(str(feedback_db))
+    run_rows = conn.execute("SELECT run_id, samples FROM training_runs").fetchall()
+    conn.close()
+    assert run_rows == [(persisted["run_id"], 40)]
 
-def test_train_falls_back_to_stratified_split_without_groups(feedback_db: Path, tmp_path: Path):
+
+def test_train_falls_back_to_stratified_split_without_groups(
+    feedback_db: Path, tmp_path: Path
+):
     _populate(feedback_db, n_per_class=20, with_groups=False)
 
     out = training.train(
@@ -93,9 +109,12 @@ def test_train_falls_back_to_stratified_split_without_groups(feedback_db: Path, 
     persisted = training.read_metrics(tmp_path / "metrics.json")
     assert persisted is not None
     assert persisted["split"] == "80/20 stratified"
+    assert persisted["solo_samples"] == 40
 
 
-def test_train_skips_validation_when_per_class_too_small(feedback_db: Path, tmp_path: Path):
+def test_train_skips_validation_when_per_class_too_small(
+    feedback_db: Path, tmp_path: Path
+):
     # 4 of each class — below the 5-of-each cutoff for held-out eval.
     _populate(feedback_db, n_per_class=4, with_groups=False)
 

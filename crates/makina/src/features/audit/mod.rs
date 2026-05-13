@@ -10,11 +10,12 @@ use axum::{
     extract::{Extension, Json},
     response::IntoResponse,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 use crate::api::models::{
-    AuditRunRequest, AuditRunResponse, AuditStepRunRequest, AuditStepStatus, AuditWorkflowResult,
-    Finding,
+    AuditReportSection, AuditRunRequest, AuditRunResponse, AuditStepRunRequest, AuditStepStatus,
+    AuditWorkflowResult, ExplorationPlan, Finding,
 };
 use crate::infra::ml::{language_hint, MlClient};
 use crate::logging::RequestId;
@@ -26,7 +27,9 @@ const SYSTEM_PROMPT: &str = concat!(
     "Use only the submitted code, scanner findings, and prior audit step outputs.\n",
     "Separate confirmed evidence from hypotheses.\n",
     "Do not claim a vulnerability is confirmed without a concrete source, path, and sink.\n",
-    "When discussing proof of concept material, keep it minimal, non-destructive, and scoped to reproduction evidence."
+    "Use exploration plans as validation guidance only; they are hypotheses until backed by submitted code or runtime evidence.\n",
+    "When discussing proof of concept material, keep it minimal, non-destructive, and scoped to reproduction evidence.\n",
+    "When a JSON schema or structured-output tool is supplied, return only data that conforms to it."
 );
 
 struct WorkflowStep {
@@ -42,6 +45,7 @@ const WORKFLOW: &[WorkflowStep] = &[
         prompt: concat!(
             "Group the scanner findings into confirmed candidates, likely false positives, and needs-review items. ",
             "Use scanner metadata as model-augmented evidence, not as ground truth. ",
+            "When a finding includes exploration_plan, use its objective and required_evidence to state what must be collected next. ",
             "For each candidate, identify the CWE, relevant lines, security boundary, and the missing evidence needed before reporting."
         ),
     },
@@ -51,6 +55,7 @@ const WORKFLOW: &[WorkflowStep] = &[
         prompt: concat!(
             "Validate the high-priority candidates with a source-to-sink review. ",
             "For each candidate, identify attacker-controlled input, propagation, sanitizer or guard checks, sink, and reachable preconditions. ",
+            "If exploration_plan is present, follow its ordered steps and feedback_signals while still verifying each claim against the submitted code. ",
             "Reject or downgrade findings when the provided code does not support a concrete path."
         ),
     },
@@ -58,15 +63,34 @@ const WORKFLOW: &[WorkflowStep] = &[
         id: "report",
         title: "Report Generation",
         prompt: concat!(
-            "Perform a final self-review against the evidence above, then output only the finished Markdown report. ",
-            "Create exactly one top-level report section for every scanner finding listed in Report ID Map, preserving the assigned MAKINA id order even when multiple findings share a CWE. ",
-            "Each top-level heading must be exactly '# MAKINA-001: <short title>', '# MAKINA-002: <short title>', and so on. ",
-            "Use only these second-level sections when evidence supports them: Summary, Vulnerability Details, Impact, Proof of Concept, Remediation, Verification Notes, Confidence. ",
+            "Perform a final self-review against the evidence above, then output the finished report as structured JSON that matches the supplied schema. ",
+            "Create exactly one finding object for every scanner finding listed in Report ID Map, preserving the assigned MAKINA id order even when multiple findings share a CWE. ",
+            "Each object id must be exactly MAKINA-001, MAKINA-002, and so on. ",
+            "Populate the title, summary, vulnerability_details, impact, proof_of_concept, remediation, verification_notes, and confidence fields with concise report-ready prose. ",
+            "Do not put Markdown headings inside field values; Makina will render the final headings. ",
             "The Proof of Concept section must be a minimal reproduction sketch or safe test input, not a weaponized exploit. ",
-            "If a finding is not externally exploitable from the submitted code alone, still output its assigned MAKINA section and say that caller/source evidence is missing in Verification Notes."
+            "If a finding is not externally exploitable from the submitted code alone, still output its assigned MAKINA object and say that caller/source evidence is missing in verification_notes."
         ),
     },
 ];
+
+#[derive(Debug, Deserialize)]
+struct StructuredAuditReport {
+    findings: Vec<StructuredAuditFinding>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StructuredAuditFinding {
+    id: String,
+    title: String,
+    summary: String,
+    vulnerability_details: String,
+    impact: String,
+    proof_of_concept: String,
+    remediation: String,
+    verification_notes: String,
+    confidence: String,
+}
 
 #[derive(Serialize)]
 struct FindingSummary<'a> {
@@ -81,6 +105,7 @@ struct FindingSummary<'a> {
     confidence: f32,
     is_uncertain: bool,
     code_snippet: String,
+    exploration_plan: &'a Option<ExplorationPlan>,
 }
 
 pub async fn run(
@@ -100,17 +125,25 @@ pub async fn run(
             max_output_tokens: output_token_budget(step, req.max_output_tokens),
             system_prompt: SYSTEM_PROMPT.to_string(),
             prompt,
+            response_schema: response_schema_for_step(step),
         };
 
         match client.audit_step(&req_id.0, &step_req).await {
-            Ok(response) => results.push(AuditWorkflowResult {
-                id: step.id.to_string(),
-                title: step.title.to_string(),
-                status: AuditStepStatus::Complete,
-                output: response.output,
-                error: None,
-                duration_ms: started_at.elapsed().as_millis() as u64,
-            }),
+            Ok(response) => {
+                let output = if step.id == "report" {
+                    report_output_to_markdown(&req, &response.output)
+                } else {
+                    response.output
+                };
+                results.push(AuditWorkflowResult {
+                    id: step.id.to_string(),
+                    title: step.title.to_string(),
+                    status: AuditStepStatus::Complete,
+                    output,
+                    error: None,
+                    duration_ms: started_at.elapsed().as_millis() as u64,
+                });
+            }
             Err(err) => {
                 results.push(AuditWorkflowResult {
                     id: step.id.to_string(),
@@ -126,9 +159,86 @@ pub async fn run(
     }
 
     let report_markdown = extract_report_markdown(&req, &results);
+    let report_sections = report_sections_from_markdown(&req, &report_markdown);
     Json(AuditRunResponse {
         results,
         report_markdown,
+        report_sections,
+    })
+}
+
+fn response_schema_for_step(step: &WorkflowStep) -> Option<Value> {
+    if step.id == "report" {
+        Some(audit_report_schema())
+    } else {
+        None
+    }
+}
+
+fn audit_report_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "findings": {
+                "type": "array",
+                "description": "One report object per scanner finding, in MAKINA identifier order.",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "The assigned report id, for example MAKINA-001."
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Short report title, preferably including CWE and affected component."
+                        },
+                        "summary": {
+                            "type": "string",
+                            "description": "A concise finding summary. No Markdown heading."
+                        },
+                        "vulnerability_details": {
+                            "type": "string",
+                            "description": "Evidence, source-to-sink path, guards, sanitizers, and limits. No Markdown heading."
+                        },
+                        "impact": {
+                            "type": "string",
+                            "description": "Security impact, constrained to what the submitted code supports. No Markdown heading."
+                        },
+                        "proof_of_concept": {
+                            "type": "string",
+                            "description": "Minimal non-destructive reproduction sketch or safe test input. No weaponized exploit and no Markdown heading."
+                        },
+                        "remediation": {
+                            "type": "string",
+                            "description": "Concrete remediation guidance. No Markdown heading."
+                        },
+                        "verification_notes": {
+                            "type": "string",
+                            "description": "Missing evidence and validation steps before external exploitability is claimed. No Markdown heading."
+                        },
+                        "confidence": {
+                            "type": "string",
+                            "description": "Confidence statement separating scanner evidence from confirmed exploitability. No Markdown heading."
+                        }
+                    },
+                    "required": [
+                        "id",
+                        "title",
+                        "summary",
+                        "vulnerability_details",
+                        "impact",
+                        "proof_of_concept",
+                        "remediation",
+                        "verification_notes",
+                        "confidence"
+                    ]
+                }
+            }
+        },
+        "required": ["findings"]
     })
 }
 
@@ -250,6 +360,7 @@ fn summarize_finding(finding: &Finding) -> FindingSummary<'_> {
         confidence: finding.confidence,
         is_uncertain: finding.is_uncertain,
         code_snippet: truncate_text(&finding.code_snippet, 1200),
+        exploration_plan: &finding.exploration_plan,
     }
 }
 
@@ -284,11 +395,235 @@ fn extract_report_markdown(req: &AuditRunRequest, results: &[AuditWorkflowResult
         .find(|result| result.id == "report" && matches!(&result.status, AuditStepStatus::Complete))
         .map(|result| result.output.trim())
         .unwrap_or_default();
-    let normalized = normalize_report_markdown(report);
+    report_output_to_markdown(req, report)
+}
+
+fn report_output_to_markdown(req: &AuditRunRequest, output: &str) -> String {
+    if let Some(sections) = structured_report_to_sections(req, output) {
+        return render_report_sections(&sections);
+    }
+    let normalized = normalize_report_markdown(output);
     if report_is_complete(&normalized, req.findings.len().min(FINDING_LIMIT)) {
         normalized
     } else {
         build_fallback_report(req)
+    }
+}
+
+fn structured_report_to_sections(
+    req: &AuditRunRequest,
+    output: &str,
+) -> Option<Vec<AuditReportSection>> {
+    let parsed: StructuredAuditReport = serde_json::from_str(output.trim()).ok()?;
+    let expected_count = req.findings.len().min(FINDING_LIMIT);
+    if expected_count == 0 {
+        return None;
+    }
+
+    let mut sections = Vec::with_capacity(expected_count);
+    for idx in 0..expected_count {
+        let id = report_id(idx);
+        let finding = parsed
+            .findings
+            .iter()
+            .find(|candidate| candidate.id == id)?;
+        sections.push(AuditReportSection {
+            id,
+            finding_id: req.findings.get(idx).map(|finding| finding.id.clone()),
+            title: clean_report_text(&finding.title),
+            summary: clean_report_text(&finding.summary),
+            vulnerability_details: clean_report_text(&finding.vulnerability_details),
+            impact: clean_report_text(&finding.impact),
+            proof_of_concept: clean_report_text(&finding.proof_of_concept),
+            remediation: clean_report_text(&finding.remediation),
+            verification_notes: clean_report_text(&finding.verification_notes),
+            confidence: clean_report_text(&finding.confidence),
+        });
+    }
+    Some(sections)
+}
+
+fn render_report_sections(sections: &[AuditReportSection]) -> String {
+    sections
+        .iter()
+        .map(render_report_section)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn render_report_section(section: &AuditReportSection) -> String {
+    [
+        format!("# {}: {}", section.id, clean_report_text(&section.title)),
+        String::new(),
+        "## Summary".to_string(),
+        clean_report_text_or(&section.summary, "No summary was generated."),
+        String::new(),
+        "## Vulnerability Details".to_string(),
+        clean_report_text_or(
+            &section.vulnerability_details,
+            "The provider did not generate vulnerability details.",
+        ),
+        String::new(),
+        "## Impact".to_string(),
+        clean_report_text_or(
+            &section.impact,
+            "Impact was not established from the submitted code.",
+        ),
+        String::new(),
+        "## Proof of Concept".to_string(),
+        clean_report_text_or(
+            &section.proof_of_concept,
+            "No safe proof-of-concept sketch was generated.",
+        ),
+        String::new(),
+        "## Remediation".to_string(),
+        clean_report_text_or(
+            &section.remediation,
+            "No remediation guidance was generated.",
+        ),
+        String::new(),
+        "## Verification Notes".to_string(),
+        clean_report_text_or(
+            &section.verification_notes,
+            "No verification notes were generated.",
+        ),
+        String::new(),
+        "## Confidence".to_string(),
+        clean_report_text_or(
+            &section.confidence,
+            "No confidence statement was generated.",
+        ),
+    ]
+    .join("\n")
+}
+
+fn report_sections_from_markdown(req: &AuditRunRequest, markdown: &str) -> Vec<AuditReportSection> {
+    let source = markdown.trim();
+    if source.is_empty() {
+        return Vec::new();
+    }
+
+    let lines: Vec<&str> = source.lines().collect();
+    let mut headings = Vec::new();
+    for (line_idx, line) in lines.iter().enumerate() {
+        if let Some((id, title)) = parse_makina_heading(line) {
+            headings.push((line_idx, id, title));
+        }
+    }
+
+    headings
+        .iter()
+        .enumerate()
+        .map(|(idx, (line_idx, id, title))| {
+            let end = headings
+                .get(idx + 1)
+                .map(|(next, _, _)| *next)
+                .unwrap_or(lines.len());
+            let body = lines[line_idx + 1..end].join("\n");
+            let fields = parse_markdown_report_fields(&body);
+            AuditReportSection {
+                id: id.clone(),
+                finding_id: finding_id_for_report_id(req, id),
+                title: title.clone(),
+                summary: fields.summary,
+                vulnerability_details: fields.vulnerability_details,
+                impact: fields.impact,
+                proof_of_concept: fields.proof_of_concept,
+                remediation: fields.remediation,
+                verification_notes: fields.verification_notes,
+                confidence: fields.confidence,
+            }
+        })
+        .collect()
+}
+
+#[derive(Default)]
+struct ReportFields {
+    summary: String,
+    vulnerability_details: String,
+    impact: String,
+    proof_of_concept: String,
+    remediation: String,
+    verification_notes: String,
+    confidence: String,
+}
+
+fn parse_markdown_report_fields(body: &str) -> ReportFields {
+    let mut fields = ReportFields::default();
+    let mut current: Option<&str> = None;
+    let mut buffer = String::new();
+
+    for line in body.lines() {
+        if let Some(section) = parse_report_subheading(line) {
+            flush_report_field(&mut fields, current, &buffer);
+            current = Some(section);
+            buffer.clear();
+        } else if current.is_some() {
+            if !buffer.is_empty() {
+                buffer.push('\n');
+            }
+            buffer.push_str(line);
+        }
+    }
+    flush_report_field(&mut fields, current, &buffer);
+    fields
+}
+
+fn parse_report_subheading(line: &str) -> Option<&'static str> {
+    match line.trim() {
+        "## Summary" => Some("summary"),
+        "## Vulnerability Details" => Some("vulnerability_details"),
+        "## Impact" => Some("impact"),
+        "## Proof of Concept" => Some("proof_of_concept"),
+        "## Remediation" => Some("remediation"),
+        "## Verification Notes" => Some("verification_notes"),
+        "## Confidence" => Some("confidence"),
+        _ => None,
+    }
+}
+
+fn flush_report_field(fields: &mut ReportFields, current: Option<&str>, buffer: &str) {
+    let value = clean_report_text(buffer);
+    match current {
+        Some("summary") => fields.summary = value,
+        Some("vulnerability_details") => fields.vulnerability_details = value,
+        Some("impact") => fields.impact = value,
+        Some("proof_of_concept") => fields.proof_of_concept = value,
+        Some("remediation") => fields.remediation = value,
+        Some("verification_notes") => fields.verification_notes = value,
+        Some("confidence") => fields.confidence = value,
+        _ => {}
+    }
+}
+
+fn parse_makina_heading(line: &str) -> Option<(String, String)> {
+    let rest = line.trim_start().strip_prefix("# MAKINA-")?;
+    let (number, title) = rest.split_once(':')?;
+    if number.len() != 3 || !number.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    Some((
+        format!("MAKINA-{number}"),
+        clean_report_text_or(title, "Audit Report"),
+    ))
+}
+
+fn finding_id_for_report_id(req: &AuditRunRequest, report_id: &str) -> Option<String> {
+    let suffix = report_id.strip_prefix("MAKINA-")?;
+    let idx = suffix.parse::<usize>().ok()?.checked_sub(1)?;
+    req.findings.get(idx).map(|finding| finding.id.clone())
+}
+
+fn clean_report_text(value: &str) -> String {
+    value.trim().to_string()
+}
+
+fn clean_report_text_or(value: &str, fallback: &str) -> String {
+    let cleaned = clean_report_text(value);
+    if cleaned.is_empty() {
+        fallback.to_string()
+    } else {
+        cleaned
     }
 }
 
@@ -477,6 +812,197 @@ mod tests {
         let report = "# MAKINA-001: A\n\n# MAKINA-002: B";
         assert!(report_is_complete(report, 2));
         assert!(!report_is_complete(report, 3));
+    }
+
+    #[test]
+    fn audit_context_includes_exploration_plan_guidance() {
+        let req = AuditRunRequest {
+            provider: crate::api::models::AuditProvider::Openai,
+            api_key: "sk-test".into(),
+            model: "model".into(),
+            max_output_tokens: 4000,
+            scan_id: Some("scan-1".into()),
+            code: "cursor.execute(query)".into(),
+            language: crate::api::models::Language::Python,
+            findings: vec![Finding {
+                id: "finding-1".into(),
+                rule_id: "taint-python-sqli".into(),
+                message: "SQL Injection".into(),
+                severity: crate::api::models::Severity::Critical,
+                line_start: 10,
+                line_end: 10,
+                code_snippet: "cursor.execute(query)".into(),
+                confidence: 0.85,
+                is_uncertain: false,
+                cwe: Some("CWE-89".into()),
+                source: "taint".into(),
+                trace_graph: None,
+                exploration_plan: Some(crate::api::models::ExplorationPlan {
+                    kind: "source_to_sink".into(),
+                    title: "Validate SQL path".into(),
+                    objective: "Confirm reachability".into(),
+                    priority: 0.82,
+                    rationale: "Taint path found".into(),
+                    steps: vec![crate::api::models::ExplorationStep {
+                        id: "source:handler".into(),
+                        kind: "source".into(),
+                        label: "handler".into(),
+                        file: Some("app.py".into()),
+                        line_start: Some(10),
+                        line_end: Some(10),
+                        detail: Some("Confirm untrusted caller".into()),
+                    }],
+                    feedback_signals: vec!["runtime coverage reaches the path".into()],
+                    required_evidence: vec!["HTTP route exposes handler".into()],
+                }),
+            }],
+        };
+
+        let context = build_audit_context(&req);
+
+        assert!(context.contains("\"exploration_plan\""));
+        assert!(context.contains("Validate SQL path"));
+        assert!(context.contains("HTTP route exposes handler"));
+    }
+
+    #[test]
+    fn structured_report_json_renders_canonical_markdown_sections() {
+        let req = AuditRunRequest {
+            provider: crate::api::models::AuditProvider::Openai,
+            api_key: "sk-test".into(),
+            model: "model".into(),
+            max_output_tokens: 4000,
+            scan_id: None,
+            code: "cursor.execute(query)".into(),
+            language: crate::api::models::Language::Python,
+            findings: vec![Finding {
+                id: "finding-1".into(),
+                rule_id: "taint-python-sqli".into(),
+                message: "SQL Injection".into(),
+                severity: crate::api::models::Severity::Critical,
+                line_start: 10,
+                line_end: 10,
+                code_snippet: "cursor.execute(query)".into(),
+                confidence: 0.85,
+                is_uncertain: false,
+                cwe: Some("CWE-89".into()),
+                source: "semgrep".into(),
+                trace_graph: None,
+                exploration_plan: None,
+            }],
+        };
+        let output = r#"{
+            "findings": [
+                {
+                    "id": "MAKINA-001",
+                    "title": "CWE-89 SQL Injection",
+                    "summary": "Confirmed unsafe SQL construction.",
+                    "vulnerability_details": "User input reaches `cursor.execute` without parameter binding.",
+                    "impact": "A reachable caller could alter SQL syntax.",
+                    "proof_of_concept": "GET /user?name=alice'",
+                    "remediation": "Use parameterized queries.",
+                    "verification_notes": "Confirm the HTTP caller and auth boundary.",
+                    "confidence": "High for the sink pattern; exploitability depends on reachability."
+                }
+            ]
+        }"#;
+
+        let markdown = report_output_to_markdown(&req, output);
+
+        assert!(markdown.starts_with("# MAKINA-001: CWE-89 SQL Injection"));
+        assert!(markdown.contains("## Summary\nConfirmed unsafe SQL construction."));
+        assert!(markdown.contains("## Vulnerability Details\nUser input reaches `cursor.execute`"));
+        assert!(markdown.contains("## Confidence\nHigh for the sink pattern"));
+        assert!(!markdown.contains("\"findings\""));
+    }
+
+    #[test]
+    fn rendered_report_markdown_round_trips_to_structured_sections() {
+        let req = AuditRunRequest {
+            provider: crate::api::models::AuditProvider::Openai,
+            api_key: "sk-test".into(),
+            model: "model".into(),
+            max_output_tokens: 4000,
+            scan_id: None,
+            code: "cursor.execute(query)".into(),
+            language: crate::api::models::Language::Python,
+            findings: vec![Finding {
+                id: "finding-1".into(),
+                rule_id: "taint-python-sqli".into(),
+                message: "SQL Injection".into(),
+                severity: crate::api::models::Severity::Critical,
+                line_start: 10,
+                line_end: 10,
+                code_snippet: "cursor.execute(query)".into(),
+                confidence: 0.85,
+                is_uncertain: false,
+                cwe: Some("CWE-89".into()),
+                source: "semgrep".into(),
+                trace_graph: None,
+                exploration_plan: None,
+            }],
+        };
+        let markdown = "# MAKINA-001: CWE-89 SQL Injection\n\n## Summary\nConfirmed.\n\n## Vulnerability Details\nSource reaches sink.\n\n## Impact\nData exposure.\n\n## Proof of Concept\nSafe input.\n\n## Remediation\nBind parameters.\n\n## Verification Notes\nConfirm route.\n\n## Confidence\nHigh.";
+
+        let sections = report_sections_from_markdown(&req, markdown);
+
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].id, "MAKINA-001");
+        assert_eq!(sections[0].finding_id.as_deref(), Some("finding-1"));
+        assert_eq!(sections[0].summary, "Confirmed.");
+        assert_eq!(sections[0].vulnerability_details, "Source reaches sink.");
+        assert_eq!(sections[0].proof_of_concept, "Safe input.");
+    }
+
+    #[test]
+    fn structured_report_json_requires_every_expected_makina_id() {
+        let req = AuditRunRequest {
+            provider: crate::api::models::AuditProvider::Openai,
+            api_key: "sk-test".into(),
+            model: "model".into(),
+            max_output_tokens: 4000,
+            scan_id: None,
+            code: "x".into(),
+            language: crate::api::models::Language::Python,
+            findings: vec![
+                Finding {
+                    id: "finding-1".into(),
+                    rule_id: "rule-a".into(),
+                    message: "A".into(),
+                    severity: crate::api::models::Severity::High,
+                    line_start: 1,
+                    line_end: 1,
+                    code_snippet: "a".into(),
+                    confidence: 0.7,
+                    is_uncertain: false,
+                    cwe: Some("CWE-89".into()),
+                    source: "semgrep".into(),
+                    trace_graph: None,
+                    exploration_plan: None,
+                },
+                Finding {
+                    id: "finding-2".into(),
+                    rule_id: "rule-b".into(),
+                    message: "B".into(),
+                    severity: crate::api::models::Severity::High,
+                    line_start: 2,
+                    line_end: 2,
+                    code_snippet: "b".into(),
+                    confidence: 0.7,
+                    is_uncertain: false,
+                    cwe: Some("CWE-78".into()),
+                    source: "semgrep".into(),
+                    trace_graph: None,
+                    exploration_plan: None,
+                },
+            ],
+        };
+        let output = r#"{"findings":[{"id":"MAKINA-001","title":"A","summary":"A","vulnerability_details":"A","impact":"A","proof_of_concept":"A","remediation":"A","verification_notes":"A","confidence":"A"}]}"#;
+
+        let markdown = report_output_to_markdown(&req, output);
+
+        assert!(markdown.contains("# MAKINA-001: CWE-89 A"));
+        assert!(markdown.contains("# MAKINA-002: CWE-78 B"));
     }
 
     #[test]

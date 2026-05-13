@@ -9,6 +9,13 @@
 	import type { AuditCase, AuditProvider, AuditStepResult, AuditStepStatus, Finding } from '$lib/types';
 	import MarkdownReport from '$lib/components/MarkdownReport.svelte';
 	import { PUBLIC_MODE } from '$lib/flags';
+	import { severityTone } from '$lib/theme';
+	import {
+		mapAuditReportSections,
+		reportIdForIndex,
+		type AuditReportSection
+	} from '$lib/auditReport';
+	import { downloadAuditPdf } from '$lib/reportPdf';
 
 	let { auditCase }: { auditCase: AuditCase | null } = $props();
 
@@ -45,6 +52,8 @@
 	let runError = $state<string | null>(null);
 	let selectedFindingId = $state<string | null>(null);
 	let lastAuditFindingIds = $state<string[]>([]);
+	let structuredReportSections = $state<AuditReportSection[]>([]);
+	let pdfDownloading = $state(false);
 
 	const currentApiKey = $derived(PUBLIC_MODE ? '' : provider === 'openai' ? openaiKey : anthropicKey);
 	const currentModel = $derived(models[provider]);
@@ -66,91 +75,18 @@
 			: 'No scan'
 	);
 
-	interface ReportSection {
-		id: string;
-		title: string;
-		source: string;
-		findingId: string | null;
-	}
-
-	interface SeverityTone {
-		badge: string;
-		border: string;
-		panel: string;
-		track: string;
-	}
-
-	function severityTone(severity: Finding['severity'] | null | undefined): SeverityTone {
-		if (severity === 'critical') {
-			return {
-				badge: 'border-red-800/70 bg-red-950/50 text-red-300',
-				border: 'border-l-red-600/90',
-				panel: 'bg-red-950/15',
-				track: 'bg-red-500'
-			};
-		}
-		if (severity === 'high') {
-			return {
-				badge: 'border-orange-800/70 bg-orange-950/45 text-orange-300',
-				border: 'border-l-orange-600/90',
-				panel: 'bg-orange-950/15',
-				track: 'bg-orange-500'
-			};
-		}
-		if (severity === 'medium') {
-			return {
-				badge: 'border-amber-800/70 bg-amber-950/45 text-amber-300',
-				border: 'border-l-amber-600/90',
-				panel: 'bg-amber-950/15',
-				track: 'bg-amber-500'
-			};
-		}
-		if (severity === 'low') {
-			return {
-				badge: 'border-sky-800/70 bg-sky-950/45 text-sky-300',
-				border: 'border-l-sky-600/90',
-				panel: 'bg-sky-950/15',
-				track: 'bg-sky-500'
-			};
-		}
-		return {
-			badge: 'border-gray-800 bg-gray-900 text-gray-400',
-			border: 'border-l-gray-700',
-			panel: 'bg-gray-950/20',
-			track: 'bg-gray-600'
-		};
-	}
-
-	function reportIdForIndex(index: number) {
-		return `MAKINA-${String(index + 1).padStart(3, '0')}`;
-	}
-
-	function splitReportMarkdown(markdown: string): Omit<ReportSection, 'findingId'>[] {
-		const source = markdown.trim();
-		if (!source) return [];
-
-		const matches = [...source.matchAll(/^#\s+(MAKINA-\d{3})(?::\s*(.*?))?\s*$/gm)];
-		if (matches.length === 0) {
-			return [{ id: 'MAKINA-001', title: 'Audit Report', source }];
-		}
-
-		return matches.map((match, index) => {
-			const start = match.index ?? 0;
-			const headerEnd = start + match[0].length;
-			const nextStart = matches[index + 1]?.index ?? source.length;
-			return {
-				id: match[1],
-				title: match[2]?.trim() || 'Audit Report',
-				source: source.slice(headerEnd, nextStart).trim()
-			};
-		});
-	}
-
+	const markdownReportSections = $derived(
+		mapAuditReportSections(
+			reportMarkdown,
+			lastAuditFindingIds,
+			auditCase?.findings.map((finding) => finding.id) ?? []
+		)
+	);
 	const reportSections = $derived(
-		splitReportMarkdown(reportMarkdown).map((section, index) => ({
-			...section,
-			findingId: lastAuditFindingIds[index] ?? auditCase?.findings[index]?.id ?? null
-		}))
+		structuredReportSections.length > 0 ? structuredReportSections : markdownReportSections
+	);
+	const canDownloadPdf = $derived(
+		Boolean(auditCase && reportMarkdown.trim() && reportSections.length > 0 && !running && !pdfDownloading)
 	);
 
 	onMount(() => {
@@ -208,10 +144,12 @@
 		activeAuditCaseId = nextAuditCaseId;
 		selectedFindingId = null;
 		lastAuditFindingIds = [];
+		structuredReportSections = [];
 		results = [];
 		reportMarkdown = '';
 		stepsExpanded = false;
 		runError = null;
+		pdfDownloading = false;
 	});
 
 	async function runAudit(scope: 'current' | 'all' = 'current') {
@@ -230,6 +168,7 @@
 		runError = null;
 		results = [];
 		reportMarkdown = '';
+		structuredReportSections = [];
 		stepsExpanded = false;
 		lastAuditFindingIds = findings.map((finding) => finding.id);
 		try {
@@ -243,12 +182,31 @@
 			});
 			results = response.results;
 			reportMarkdown = response.reportMarkdown;
+			structuredReportSections = response.reportSections;
 			await tick();
 			if (scope === 'current' && selectedFindingId) scrollToFindingReport(selectedFindingId);
 		} catch (err) {
 			runError = err instanceof Error ? err.message : String(err);
 		} finally {
 			running = false;
+		}
+	}
+
+	async function downloadPdf() {
+		if (!auditCase || !canDownloadPdf) return;
+		pdfDownloading = true;
+		runError = null;
+		try {
+			await downloadAuditPdf({
+				auditCase,
+				reportMarkdown,
+				findingIds: lastAuditFindingIds,
+				reportSections: structuredReportSections
+			});
+		} catch (err) {
+			runError = err instanceof Error ? err.message : String(err);
+		} finally {
+			pdfDownloading = false;
 		}
 	}
 
@@ -280,7 +238,7 @@
 		return reportSections.findIndex((section) => section.findingId === findingId);
 	}
 
-	function findingForSection(section: ReportSection) {
+	function findingForSection(section: AuditReportSection) {
 		if (!section.findingId) return null;
 		return auditCase?.findings.find((finding) => finding.id === section.findingId) ?? null;
 	}
@@ -299,7 +257,7 @@
 		return value.replace(/[^A-Za-z0-9_-]/g, '-');
 	}
 
-	function reportElementId(section: ReportSection, index: number) {
+	function reportElementId(section: AuditReportSection, index: number) {
 		return section.findingId ? `audit-report-${domId(section.findingId)}` : `audit-report-${index}`;
 	}
 
@@ -321,41 +279,41 @@
 		return [
 			'w-full rounded-lg border border-l-4 p-3 text-left transition-colors',
 			selected
-				? 'border-indigo-500 border-l-indigo-400 bg-indigo-950/40 shadow-[0_0_0_1px_rgba(99,102,241,0.25)]'
+				? 'border-violet-500 border-l-[var(--mk-copper)] bg-violet-950/30 shadow-[0_0_0_1px_rgba(139,92,246,0.25)]'
 				: audited
-					? `border-emerald-900/70 ${tone.border} bg-gray-900/70 hover:border-emerald-800`
-					: `border-gray-800 ${tone.border} bg-gray-900/60 hover:border-gray-700`,
+					? `border-teal-900/70 ${tone.border} bg-[var(--mk-bg-elevated)] hover:border-teal-800`
+					: `border-[var(--mk-border)] ${tone.border} bg-[var(--mk-bg-elevated)] hover:border-[var(--mk-border-strong)]`,
 			'cursor-pointer'
 		].join(' ');
 	}
 
-	function reportCardClass(section: ReportSection, finding: Finding | null) {
+	function reportCardClass(section: AuditReportSection, finding: Finding | null) {
 		const selected = section.findingId !== null && section.findingId === selectedFindingId;
 		const tone = severityTone(finding?.severity);
 		return [
 			'overflow-hidden rounded-lg border border-l-4 transition-colors',
 			selected
-				? `border-indigo-500 border-l-indigo-400 ${tone.panel} shadow-[0_0_0_1px_rgba(99,102,241,0.25)]`
-				: `border-gray-800 ${tone.border} bg-gray-900/40`
+				? `border-violet-500 border-l-[var(--mk-copper)] ${tone.panel} shadow-[0_0_0_1px_rgba(139,92,246,0.25),0_0_26px_rgba(79,70,229,0.12)]`
+				: `border-[var(--mk-border)] ${tone.border} bg-[var(--mk-bg-elevated)]`
 		].join(' ');
 	}
 
 	function statusClass(status: AuditStepStatus) {
-		if (status === 'complete') return 'border-emerald-800 bg-emerald-950/60 text-emerald-400';
-		if (status === 'running') return 'border-indigo-800 bg-indigo-950/60 text-indigo-300';
+		if (status === 'complete') return 'border-teal-800 bg-teal-950/60 text-teal-300';
+		if (status === 'running') return 'border-violet-800 bg-violet-950/60 text-violet-300';
 		if (status === 'error') return 'border-red-800 bg-red-950/60 text-red-300';
-		return 'border-gray-800 bg-gray-950 text-gray-600';
+		return 'border-[var(--mk-border)] bg-[var(--mk-bg-panel)] text-gray-600';
 	}
 </script>
 
-<div class="flex flex-1 min-h-0 flex-col bg-gray-950 lg:flex-row">
+<div class="flex flex-1 min-h-0 min-w-0 overflow-hidden flex-col bg-[var(--mk-bg)] lg:flex-row">
 	<!-- Settings sidebar -->
-	<aside class="flex max-h-[45vh] w-full shrink-0 flex-col border-b border-gray-800/80 bg-gray-950 lg:max-h-none lg:w-80 lg:border-b-0 lg:border-r">
+	<aside class="flex max-h-[45vh] w-full shrink-0 flex-col border-b border-[var(--mk-border)] bg-[var(--mk-bg-panel)] lg:max-h-none lg:w-80 lg:border-b-0 lg:border-r">
 		<!-- Header -->
-		<div class="flex h-11 shrink-0 items-center justify-between border-b border-gray-800/80 px-4">
+		<div class="flex h-11 shrink-0 items-center justify-between border-b border-[var(--mk-border)] px-4">
 			<div class="flex items-center gap-2 min-w-0">
 				<h2 class="text-[10px] font-bold uppercase tracking-widest text-gray-500">Audit</h2>
-				<span class="rounded border border-gray-800 bg-gray-900 px-2 py-0.5 text-[10px] font-semibold text-gray-400">
+				<span class="rounded border border-[var(--mk-border-strong)] bg-[var(--mk-bg-elevated)] px-2 py-0.5 text-[10px] font-semibold text-[var(--mk-text-soft)]">
 					{findingSummary}
 				</span>
 			</div>
@@ -371,15 +329,15 @@
 				</section>
 			{:else}
 				<!-- Provider toggle -->
-				<div class="grid grid-cols-2 gap-1 rounded-lg border border-gray-800 bg-gray-900 p-1">
+				<div class="grid grid-cols-2 gap-1 rounded-lg border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] p-1">
 					{#each PROVIDERS as item}
 						<button
 							onclick={() => (provider = item.value)}
 							class={[
 								'relative z-0 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors',
 								provider === item.value
-									? 'bg-indigo-600 text-white'
-									: 'text-gray-500 hover:bg-gray-800 hover:text-gray-300 cursor-pointer'
+									? 'bg-violet-600 text-white shadow-[0_0_18px_rgba(139,92,246,0.18)]'
+									: 'text-gray-500 hover:bg-[var(--mk-bg-hover)] hover:text-[var(--mk-text-soft)] cursor-pointer'
 							].join(' ')}
 						>
 							{item.label}
@@ -398,7 +356,7 @@
 								else anthropicKey = e.currentTarget.value;
 							}}
 							placeholder={provider === 'openai' ? 'sk-...' : 'sk-ant-...'}
-							class="w-full rounded-md border border-gray-800 bg-gray-900 px-3 py-2 text-xs text-gray-200 placeholder-gray-700 focus:border-indigo-600/70 focus:outline-none"
+							class="w-full rounded-md border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-3 py-2 text-xs text-[var(--mk-text)] placeholder-gray-700 focus:border-violet-500/80 focus:outline-none"
 						/>
 					</label>
 
@@ -406,7 +364,7 @@
 						<input
 							type="checkbox"
 							bind:checked={rememberKeys}
-							class="h-3.5 w-3.5 rounded border-gray-700 bg-gray-900 accent-indigo-600"
+							class="h-3.5 w-3.5 rounded border-[var(--mk-border-strong)] bg-[var(--mk-bg-elevated)] accent-violet-600"
 						/>
 						<span>Remember key in this browser</span>
 					</label>
@@ -417,7 +375,7 @@
 							type="text"
 							value={currentModel}
 							oninput={(e) => setModel(e.currentTarget.value)}
-							class="w-full rounded-md border border-gray-800 bg-gray-900 px-3 py-2 font-mono text-xs text-gray-200 focus:border-indigo-600/70 focus:outline-none"
+							class="w-full rounded-md border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-3 py-2 font-mono text-xs text-[var(--mk-text)] focus:border-violet-500/80 focus:outline-none"
 						/>
 					</label>
 
@@ -428,7 +386,7 @@
 							min="256"
 							max="8000"
 							bind:value={maxOutputTokens}
-							class="w-full rounded-md border border-gray-800 bg-gray-900 px-3 py-2 font-mono text-xs text-gray-200 focus:border-indigo-600/70 focus:outline-none"
+							class="w-full rounded-md border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-3 py-2 font-mono text-xs text-[var(--mk-text)] focus:border-violet-500/80 focus:outline-none"
 						/>
 					</label>
 				</section>
@@ -437,11 +395,11 @@
 	</aside>
 
 	<!-- Main area -->
-	<main class="flex flex-1 min-w-0 flex-col min-h-0">
+	<main class="flex flex-1 min-w-0 flex-col min-h-0 overflow-hidden">
 		<!-- Header -->
-		<div class="flex h-11 shrink-0 items-center justify-between border-b border-gray-800/80 px-4">
-			<div class="flex items-center gap-3 min-w-0 overflow-hidden">
-				<h1 class="text-sm font-semibold text-gray-200 shrink-0">LLM Audit</h1>
+		<div class="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--mk-border)] px-4 py-2">
+			<div class="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
+				<h1 class="text-sm font-semibold text-[var(--mk-text)] shrink-0">LLM Audit</h1>
 				{#if auditCase}
 					<div class="hidden sm:flex items-center gap-2 text-xs text-gray-500 min-w-0">
 						<span class="font-mono shrink-0">{auditCase.language}</span>
@@ -459,7 +417,34 @@
 				{/if}
 			</div>
 
-			<div class="flex items-center gap-2 shrink-0">
+			<div class="flex max-w-full shrink-0 flex-wrap items-center justify-end gap-2">
+				{#if reportMarkdown}
+					<button
+						onclick={downloadPdf}
+						disabled={!canDownloadPdf}
+						class={[
+							'inline-flex items-center justify-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors',
+							canDownloadPdf
+								? 'border-[var(--mk-border-strong)] bg-[var(--mk-bg-elevated)] text-[var(--mk-text-soft)] hover:border-[var(--mk-copper)] hover:bg-[var(--mk-bg-hover)] cursor-pointer'
+								: 'border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] text-gray-700 cursor-not-allowed'
+						].join(' ')}
+						title="Download audit report as PDF"
+					>
+						{#if pdfDownloading}
+							<svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+								<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+								<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+							</svg>
+							PDF
+						{:else}
+							<svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M12 3v10.5m0 0 3.5-3.5M12 13.5 8.5 10M5 17.5v1.25A2.25 2.25 0 0 0 7.25 21h9.5A2.25 2.25 0 0 0 19 18.75V17.5" />
+							</svg>
+							PDF
+						{/if}
+					</button>
+				{/if}
+
 				{#if selectedFinding}
 					<button
 						onclick={() => runAudit('all')}
@@ -467,8 +452,8 @@
 						class={[
 							'inline-flex items-center justify-center rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors',
 							canRunAll
-								? 'border-gray-700 bg-gray-900 text-gray-300 hover:border-gray-600 hover:bg-gray-800 cursor-pointer'
-								: 'border-gray-800 bg-gray-900 text-gray-700 cursor-not-allowed'
+								? 'border-[var(--mk-border-strong)] bg-[var(--mk-bg-elevated)] text-[var(--mk-text-soft)] hover:border-violet-500/60 hover:bg-[var(--mk-bg-hover)] cursor-pointer'
+								: 'border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] text-gray-700 cursor-not-allowed'
 						].join(' ')}
 					>
 						Run All
@@ -481,8 +466,8 @@
 					class={[
 						'inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors',
 						canRun
-							? 'bg-indigo-600 text-white hover:bg-indigo-500 cursor-pointer'
-							: 'bg-gray-900 text-gray-700 border border-gray-800 cursor-not-allowed'
+							? 'bg-violet-600 text-white hover:bg-violet-500 shadow-[0_0_18px_rgba(139,92,246,0.18)] cursor-pointer'
+							: 'bg-[var(--mk-bg-elevated)] text-gray-700 border border-[var(--mk-border)] cursor-not-allowed'
 					].join(' ')}
 				>
 					{#if running}
@@ -510,7 +495,7 @@
 		{#if !auditCase}
 			<div class="flex flex-1 items-center justify-center px-6 text-center">
 				<div class="max-w-sm">
-					<div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl border border-dashed border-gray-700/70 bg-gray-900">
+					<div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl border border-dashed border-[var(--mk-border-strong)] bg-[var(--mk-bg-elevated)]">
 						<svg class="h-6 w-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
 							<path stroke-linecap="round" stroke-linejoin="round" d="M9 6.75h6M9 12h6m-6 5.25h3.5M5.25 3.75h13.5A1.5 1.5 0 0120.25 5.25v13.5a1.5 1.5 0 01-1.5 1.5H5.25a1.5 1.5 0 01-1.5-1.5V5.25a1.5 1.5 0 011.5-1.5z" />
 						</svg>
@@ -522,10 +507,10 @@
 				</div>
 			</div>
 		{:else}
-			<div class="flex flex-1 min-h-0 flex-col xl:flex-row">
+			<div class="flex flex-1 min-h-0 min-w-0 flex-col xl:flex-row overflow-x-hidden">
 				<!-- Scanner Findings list -->
-				<section class="flex shrink-0 flex-col border-b border-gray-800/80 bg-gray-950/70 xl:h-auto xl:w-80 xl:border-b-0 xl:border-r">
-					<div class="flex h-10 shrink-0 items-center justify-between gap-3 border-b border-gray-800/60 px-4">
+				<section class="flex shrink-0 flex-col border-b border-[var(--mk-border)] bg-[var(--mk-bg-panel)] xl:h-auto xl:w-80 xl:border-b-0 xl:border-r">
+					<div class="flex h-10 shrink-0 items-center justify-between gap-3 border-b border-[var(--mk-border)] px-4">
 						<h3 class="text-[10px] font-bold uppercase tracking-widest text-gray-600">Scanner Findings</h3>
 						<div class="flex items-center gap-2">
 							{#if selectedFinding}
@@ -536,7 +521,7 @@
 									Clear
 								</button>
 							{/if}
-							<span class="rounded border border-gray-800 bg-gray-900 px-2 py-0.5 text-[10px] font-semibold text-gray-500">
+							<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 py-0.5 text-[10px] font-semibold text-gray-500">
 								{auditCase.findings.length}
 							</span>
 						</div>
@@ -548,17 +533,19 @@
 								class={findingCardClass(finding)}
 							>
 								<div class="mb-2 flex flex-wrap items-center gap-2">
-									<span class={['rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase shrink-0', severityTone(finding.severity).badge].join(' ')}>
-										{finding.severity}
+									<span class="rounded border border-violet-900/50 bg-violet-950/40 px-1.5 py-0.5 font-mono text-[10px] font-bold text-violet-200 shrink-0">
+										{reportBadgeForFinding(finding, i)}
 									</span>
-									<span class="font-mono text-[10px] text-gray-500 shrink-0">{finding.rule_id}</span>
 									{#if finding.cwe}
 										<span class="rounded bg-gray-800 px-1.5 py-0.5 font-mono text-[10px] text-gray-500 shrink-0">
 											{finding.cwe}
 										</span>
 									{/if}
-									<span class="rounded bg-indigo-950/40 border border-indigo-900/50 px-1.5 py-0.5 font-mono text-[10px] text-indigo-300 shrink-0">
-										{reportBadgeForFinding(finding, i)}
+									<span class={['rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase shrink-0', severityTone(finding.severity).badge].join(' ')}>
+										{finding.severity}
+									</span>
+									<span class="font-mono text-[10px] text-gray-500 shrink-0">
+										{finding.rule_id}
 									</span>
 									<span class="ml-auto font-mono text-[10px] text-gray-600 shrink-0">
 										L{finding.line_start}
@@ -571,7 +558,7 @@
 				</section>
 
 				<!-- Report area -->
-				<section class="flex-1 overflow-y-auto p-4">
+				<section class="flex-1 min-w-0 overflow-x-hidden overflow-y-auto p-4">
 					{#if runError}
 						<div class="mb-4 rounded-lg border border-red-800 bg-red-950/40 p-3 text-xs text-red-300">
 							{runError}
@@ -579,8 +566,8 @@
 					{/if}
 
 					{#if running && !reportMarkdown}
-						<div class="rounded-lg border border-gray-800 bg-gray-900/50">
-							<div class="flex items-center gap-2 border-b border-gray-800 px-4 py-3">
+						<div class="rounded-lg border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)]">
+							<div class="flex items-center gap-2 border-b border-[var(--mk-border)] px-4 py-3">
 								<h3 class="text-sm font-semibold text-gray-300">Audit Workflow</h3>
 								<span class={['ml-auto rounded border px-2 py-0.5 text-[10px] font-semibold uppercase', statusClass('running')].join(' ')}>
 									running
@@ -597,7 +584,7 @@
 								{#if results.length > 0}
 									<button
 										onclick={() => (stepsExpanded = !stepsExpanded)}
-										class="text-[10px] font-semibold text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer"
+										class="text-[10px] font-semibold text-violet-300 hover:text-violet-200 transition-colors cursor-pointer"
 									>
 										{stepsExpanded ? 'Hide workflow steps' : 'Show workflow steps'}
 									</button>
@@ -614,33 +601,37 @@
 											class={reportCardClass(section, sectionFinding)}
 										>
 											<div class={['h-1', sectionFinding ? sectionTone.track : 'bg-gray-700'].join(' ')}></div>
-											<div class="border-b border-gray-800 bg-gray-950/35 px-4 py-3">
-												<div class="flex items-center gap-2 min-w-0">
-													<span class="font-mono text-xs font-bold text-indigo-300 shrink-0">{section.id}</span>
-													<span class="min-w-0 text-sm font-semibold text-gray-100 truncate">{section.title}</span>
+											<div class="border-b border-[var(--mk-border)] bg-[var(--mk-bg-panel)] px-5 py-5">
+												<div class="flex items-start gap-3 min-w-0">
+													<span class="shrink-0 rounded border border-violet-900/60 bg-violet-950/40 px-2 py-1 font-mono text-sm font-bold text-violet-100 leading-none">
+														{section.id}
+													</span>
+													<h4 class="min-w-0 flex-1 text-base font-semibold text-gray-100 break-words leading-snug">
+														{section.title}
+													</h4>
 													{#if section.findingId}
 														<button
 															onclick={() => section.findingId && selectFinding(section.findingId)}
-															class="ml-auto text-[10px] font-semibold text-gray-500 hover:text-gray-300 transition-colors cursor-pointer shrink-0"
+															class="shrink-0 text-[10px] font-semibold text-gray-500 hover:text-gray-300 transition-colors cursor-pointer leading-snug"
 														>
 															Focus finding
 														</button>
 													{/if}
 												</div>
 												{#if sectionFinding}
-													<div class="mt-2 flex flex-wrap items-center gap-2">
-														<span class={['rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase shrink-0', sectionTone.badge].join(' ')}>
-															Impact {sectionFinding.severity}
-														</span>
-														<span class="rounded border border-gray-800 bg-gray-900 px-1.5 py-0.5 font-mono text-[10px] text-gray-400 shrink-0">
-															{sectionFinding.rule_id}
-														</span>
+													<div class="mt-3 flex flex-wrap items-center gap-2">
 														{#if sectionFinding.cwe}
-															<span class="rounded border border-gray-800 bg-gray-900 px-1.5 py-0.5 font-mono text-[10px] text-gray-400 shrink-0">
+															<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 py-0.5 font-mono text-[10px] text-gray-400 shrink-0">
 																{sectionFinding.cwe}
 															</span>
 														{/if}
-														<span class="rounded border border-gray-800 bg-gray-900 px-1.5 py-0.5 font-mono text-[10px] text-gray-500 shrink-0">
+														<span class={['rounded border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide shrink-0', sectionTone.badge].join(' ')}>
+															{sectionFinding.severity}
+														</span>
+														<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 py-0.5 font-mono text-[10px] text-gray-400 shrink-0">
+															{sectionFinding.rule_id}
+														</span>
+														<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 py-0.5 font-mono text-[10px] text-gray-500 shrink-0">
 															L{sectionFinding.line_start}
 														</span>
 													</div>
@@ -657,7 +648,7 @@
 									{/each}
 								</div>
 							{:else}
-								<div class="rounded-lg border border-gray-800 bg-gray-900/40 p-4">
+								<div class="rounded-lg border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] p-4">
 									<MarkdownReport source={reportMarkdown} />
 								</div>
 							{/if}
@@ -667,8 +658,8 @@
 							<div class="space-y-3">
 								<h3 class="text-[10px] font-bold uppercase tracking-widest text-gray-500">Workflow Steps</h3>
 								{#each results as result, i (result.id)}
-									<div class="rounded-lg border border-gray-800 bg-gray-900/50">
-										<div class="flex items-center gap-2 border-b border-gray-800 px-4 py-3">
+									<div class="rounded-lg border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)]">
+										<div class="flex items-center gap-2 border-b border-[var(--mk-border)] px-4 py-3">
 											<span class="rounded bg-gray-800 px-1.5 py-0.5 font-mono text-[10px] text-gray-500">
 												{i + 1}
 											</span>
@@ -696,8 +687,8 @@
 					{:else if results.length > 0}
 						<div class="space-y-3">
 							{#each results as result, i (result.id)}
-								<div class="rounded-lg border border-gray-800 bg-gray-900/50">
-									<div class="flex items-center gap-2 border-b border-gray-800 px-4 py-3">
+								<div class="rounded-lg border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)]">
+									<div class="flex items-center gap-2 border-b border-[var(--mk-border)] px-4 py-3">
 										<span class="rounded bg-gray-800 px-1.5 py-0.5 font-mono text-[10px] text-gray-500">
 											{i + 1}
 										</span>
@@ -722,8 +713,8 @@
 							{/each}
 						</div>
 					{:else}
-						<div class="rounded-lg border border-gray-800 bg-gray-900/50">
-							<div class="flex items-center gap-2 border-b border-gray-800 px-4 py-3">
+						<div class="rounded-lg border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)]">
+							<div class="flex items-center gap-2 border-b border-[var(--mk-border)] px-4 py-3">
 								<h3 class="text-sm font-semibold text-gray-300">Audit Workflow</h3>
 								<span class={['ml-auto rounded border px-2 py-0.5 text-[10px] font-semibold uppercase', statusClass('idle')].join(' ')}>
 									idle

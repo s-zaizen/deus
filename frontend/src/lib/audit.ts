@@ -1,4 +1,5 @@
 import { PUBLIC_API_URL } from '$env/static/public';
+import { reportSectionFromWire, type AuditReportSectionWire } from '$lib/auditReport';
 import type { AuditCase, AuditProvider, AuditStepResult, Finding } from '$lib/types';
 
 export const DEFAULT_OPENAI_MODEL = 'gpt-5.5';
@@ -28,6 +29,7 @@ interface AuditRunResultWire {
 interface AuditRunResponseWire {
 	results?: AuditRunResultWire[];
 	report_markdown?: string;
+	report_sections?: AuditReportSectionWire[];
 }
 
 function toStepResult(result: AuditRunResultWire): AuditStepResult {
@@ -41,7 +43,11 @@ function toStepResult(result: AuditRunResultWire): AuditStepResult {
 	};
 }
 
-export async function runAuditWorkflow(options: AuditRunOptions): Promise<{ results: AuditStepResult[]; reportMarkdown: string }> {
+export async function runAuditWorkflow(options: AuditRunOptions): Promise<{
+	results: AuditStepResult[];
+	reportMarkdown: string;
+	reportSections: ReturnType<typeof reportSectionFromWire>[];
+}> {
 	const res = await fetch(`${BASE}/api/audit/run`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
@@ -74,6 +80,7 @@ export async function runAuditWorkflow(options: AuditRunOptions): Promise<{ resu
 	const body = (await res.json()) as AuditRunResponseWire;
 	return {
 		results: (body.results ?? []).map(toStepResult),
-		reportMarkdown: body.report_markdown ?? ''
+		reportMarkdown: body.report_markdown ?? '',
+		reportSections: (body.report_sections ?? []).map(reportSectionFromWire)
 	};
 }

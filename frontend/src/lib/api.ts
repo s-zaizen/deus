@@ -1,4 +1,15 @@
-import type { Finding, ScanResponse, Stats, Language, Label, VerifyCase, KnowledgeCase, ModelMetrics } from './types';
+import type {
+	Finding,
+	ScanResponse,
+	ProjectScanFileRequest,
+	ProjectScanResponse,
+	Stats,
+	Language,
+	Label,
+	VerifyCase,
+	KnowledgeCase,
+	ModelMetrics
+} from './types';
 
 import { PUBLIC_API_URL } from '$env/static/public';
 const BASE = PUBLIC_API_URL || 'http://localhost:7373';
@@ -10,6 +21,16 @@ export async function scanCode(code: string, language: Language): Promise<ScanRe
 		body: JSON.stringify({ code, language })
 	});
 	if (!res.ok) throw new Error(`Scan failed: ${res.status}`);
+	return res.json();
+}
+
+export async function scanProject(files: ProjectScanFileRequest[]): Promise<ProjectScanResponse> {
+	const res = await fetch(`${BASE}/api/scan/project`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ files })
+	});
+	if (!res.ok) throw new Error(`Project scan failed: ${res.status}`);
 	return res.json();
 }
 

@@ -134,6 +134,31 @@ def test_sink_only_handles_short_snippets(monkeypatch):
     assert command_injection["findings"][0]["cwe"] == "CWE-78"
 
 
+def test_sink_only_suppresses_parameterized_sql(monkeypatch):
+    def fail_embed_batch(_snippets):
+        raise AssertionError("safe SQL sink should stay in sink-only path")
+
+    monkeypatch.setattr(analyzer.embedder, "embed_batch", fail_embed_batch)
+
+    out = analyzer._analyze_sink_only(
+        'cursor.execute("SELECT id FROM users WHERE name = ?", (name,))',
+        "python",
+    )
+
+    assert out["findings"] == []
+
+
+def test_sink_only_reports_go_query_sink(monkeypatch):
+    def fail_embed_batch(_snippets):
+        raise AssertionError("Go sink-only path must not call CodeBERT")
+
+    monkeypatch.setattr(analyzer.embedder, "embed_batch", fail_embed_batch)
+
+    out = analyzer._analyze_sink_only("db.Query(sqlText)", "go")
+
+    assert out["findings"][0]["cwe"] == "CWE-89"
+
+
 def test_sink_only_reports_multiple_cwes_in_one_window(monkeypatch):
     def fail_embed_batch(_snippets):
         raise AssertionError("multi-sink windows must not call CodeBERT")

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::Hash};
 
 #[derive(Debug, Deserialize)]
 pub struct ScanRequest {
@@ -9,7 +9,7 @@ pub struct ScanRequest {
     pub filename: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
     Auto,
@@ -38,6 +38,73 @@ pub struct Finding {
     pub is_uncertain: bool,
     pub cwe: Option<String>,
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_graph: Option<TraceGraph>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exploration_plan: Option<ExplorationPlan>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct TraceGraph {
+    #[serde(default)]
+    pub nodes: Vec<TraceGraphNode>,
+    #[serde(default)]
+    pub edges: Vec<TraceGraphEdge>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TraceGraphNode {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_start: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_end: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TraceGraphEdge {
+    pub id: String,
+    pub source: String,
+    pub target: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ExplorationPlan {
+    pub kind: String,
+    pub title: String,
+    pub objective: String,
+    pub priority: f32,
+    pub rationale: String,
+    #[serde(default)]
+    pub steps: Vec<ExplorationStep>,
+    #[serde(default)]
+    pub feedback_signals: Vec<String>,
+    #[serde(default)]
+    pub required_evidence: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ExplorationStep {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_start: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_end: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -53,6 +120,35 @@ pub enum Severity {
 pub struct ScanResponse {
     pub scan_id: String,
     pub findings: Vec<Finding>,
+    pub language: Language,
+    pub lines_scanned: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProjectScanFile {
+    pub path: String,
+    pub code: String,
+    pub language: Option<Language>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProjectScanRequest {
+    pub files: Vec<ProjectScanFile>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectScanFileResult {
+    pub path: String,
+    pub scan_id: String,
+    pub language: Language,
+    pub lines_scanned: usize,
+    pub findings: Vec<Finding>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProjectScanResponse {
+    pub scan_id: String,
+    pub files: Vec<ProjectScanFileResult>,
     pub language: Language,
     pub lines_scanned: usize,
 }
@@ -165,6 +261,8 @@ pub struct AuditStepRunRequest {
     pub max_output_tokens: u32,
     pub system_prompt: String,
     pub prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -205,6 +303,21 @@ pub struct AuditWorkflowResult {
 pub struct AuditRunResponse {
     pub results: Vec<AuditWorkflowResult>,
     pub report_markdown: String,
+    pub report_sections: Vec<AuditReportSection>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct AuditReportSection {
+    pub id: String,
+    pub finding_id: Option<String>,
+    pub title: String,
+    pub summary: String,
+    pub vulnerability_details: String,
+    pub impact: String,
+    pub proof_of_concept: String,
+    pub remediation: String,
+    pub verification_notes: String,
+    pub confidence: String,
 }
 
 /// Shared `?skip_train=true` query — used by Knowledge submit and

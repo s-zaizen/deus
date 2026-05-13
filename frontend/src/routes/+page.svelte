@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { SvelteSet } from 'svelte/reactivity';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import AuditTab from '$lib/components/AuditTab.svelte';
 	import CodeEditor from '$lib/components/CodeEditor.svelte';
 	import FindingsList from '$lib/components/FindingsList.svelte';
 	import FileTree from '$lib/components/FileTree.svelte';
+	import GraphTab from '$lib/components/GraphTab.svelte';
 	import KnowledgeTab from '$lib/components/KnowledgeTab.svelte';
 	import ModelTab from '$lib/components/ModelTab.svelte';
 	import ScanPanel from '$lib/components/ScanPanel.svelte';
@@ -12,6 +13,7 @@
 	import VerifyTab from '$lib/components/VerifyTab.svelte';
 	import {
 		scanCode,
+		scanProject,
 		submitFeedback,
 		getStats,
 		getVerifyQueue,
@@ -25,12 +27,13 @@
 	import { PUBLIC_MODE } from '$lib/flags';
 	import type { AuditCase, Finding, Language, Label, Stats, VerifyCase, KnowledgeCase, FileNode } from '$lib/types';
 
-	type Tab = 'scan' | 'audit' | 'verify' | 'knowledge' | 'model';
+	type Tab = 'scan' | 'graph' | 'audit' | 'verify' | 'knowledge' | 'model';
 
-	const VISIBLE_TABS: readonly Tab[] = ['scan', 'audit', 'verify', 'knowledge', 'model'] as const;
+	const VISIBLE_TABS: readonly Tab[] = ['scan', 'graph', 'audit', 'verify', 'knowledge', 'model'] as const;
 
 	const TAB_DESCRIPTIONS: Record<Tab, string> = {
 		scan: 'Scan code for vulnerabilities',
+		graph: 'Trace graph workspace',
 		audit: 'Run LLM audit workflow',
 		verify: 'Review and label findings',
 		knowledge: 'Browse verified cases',
@@ -59,6 +62,8 @@
 	let folderRoot = $state<FileNode | null>(null);
 	let selectedFile = $state<FileNode | null>(null);
 	let scannedPaths = new SvelteSet<string>();
+	let scannedFindingsByPath = new SvelteMap<string, Finding[]>();
+	let scanIdsByPath = new SvelteMap<string, string>();
 	let scanProgress = $state<{ current: number; total: number } | null>(null);
 	let explorerDragging = $state(false);
 
@@ -66,6 +71,22 @@
 	const focusedLine = $derived(focusedFinding?.line_start ?? null);
 	const currentFilename = $derived(selectedFile?.name);
 	const findingCountText = $derived(`${findings.length} finding${findings.length === 1 ? '' : 's'}`);
+	const graphFindings = $derived.by(() => {
+		if (!folderRoot) return findings;
+		const allFindings: Finding[] = [];
+		for (const file of flatFiles(folderRoot)) {
+			allFindings.push(...(scannedFindingsByPath.get(file.path) ?? []));
+		}
+		return allFindings.length > 0 ? allFindings : findings;
+	});
+	const auditAllFindingCount = $derived(
+		folderRoot
+			? flatFiles(folderRoot).reduce(
+					(total, file) => total + (scannedFindingsByPath.get(file.path)?.length ?? 0),
+					0
+				)
+			: 0
+	);
 
 	// ── Init ─────────────────────────────────────────────────────────────────────
 
@@ -162,6 +183,11 @@
 			findings = result.findings;
 			currentScanId = result.scan_id;
 			scanCompleted = true;
+			if (selectedFile?.path) {
+				scannedFindingsByPath.set(selectedFile.path, result.findings);
+				scanIdsByPath.set(selectedFile.path, result.scan_id);
+				scannedPaths.add(selectedFile.path);
+			}
 		} catch {
 			error = 'Cannot connect to makina server. Run: docker compose up -d';
 		} finally {
@@ -177,6 +203,54 @@
 			code,
 			language,
 			findings: [...findings],
+			createdAt: new Date().toISOString()
+		};
+		activeTab = 'audit';
+	}
+
+	function scannedFilesWithFindings() {
+		if (!folderRoot) return [];
+		return flatFiles(folderRoot).filter((file) => (scannedFindingsByPath.get(file.path)?.length ?? 0) > 0);
+	}
+
+	function auditLanguageForFiles(files: FileNode[]): Language {
+		const languages = new Set<Language>();
+		for (const file of files) {
+			if (file.language) languages.add(file.language);
+		}
+		return languages.size === 1 ? [...languages][0] : 'auto';
+	}
+
+	function buildAuditAllCode(files: FileNode[]) {
+		return files
+			.map((file) => {
+				const languageHint = file.language ? ` | language: ${file.language}` : '';
+				return [`/* File: ${file.path}${languageHint} */`, file.content ?? ''].join('\n');
+			})
+			.join('\n\n');
+	}
+
+	function handleSendAllToAudit() {
+		const files = scannedFilesWithFindings();
+		if (files.length === 0) return;
+
+		const auditFindings = files.flatMap((file) =>
+			(scannedFindingsByPath.get(file.path) ?? []).map((finding) => ({
+				...finding,
+				message: `[${file.path}] ${finding.message}`,
+				source: `${finding.source} @ ${file.path}`,
+				code_snippet: `// File: ${file.path}\n${finding.code_snippet}`
+			}))
+		);
+		if (auditFindings.length === 0) return;
+
+		const auditId = crypto.randomUUID();
+		auditCase = {
+			id: auditId,
+			scanId: files.length === 1 ? (scanIdsByPath.get(files[0].path) ?? null) : `audit-all-${auditId}`,
+			code: buildAuditAllCode(files),
+			language: auditLanguageForFiles(files),
+			findings: auditFindings,
 			createdAt: new Date().toISOString()
 		};
 		activeTab = 'audit';
@@ -232,8 +306,12 @@
 		await refreshStats();
 	}
 
-	function handleFocusFinding(id: string) {
+	function handleSelectFinding(id: string) {
 		focusedFindingId = id;
+	}
+
+	function handleFocusFinding(id: string) {
+		handleSelectFinding(id);
 		activeTab = 'scan';
 	}
 
@@ -242,6 +320,8 @@
 		if (!root) return;
 		folderRoot = root;
 		scannedPaths.clear();
+		scannedFindingsByPath.clear();
+		scanIdsByPath.clear();
 		scanProgress = null;
 		const files = flatFiles(root);
 		if (files.length > 0) handleSelectFile(files[0]);
@@ -281,47 +361,68 @@
 	}
 
 	function handleSelectFile(node: FileNode) {
-		if (!node.content || !node.language) return;
+		if (!node.content) return;
 		selectedFile = node;
 		code = node.content;
-		language = node.language;
-		findings = [];
+		language = node.language ?? 'auto';
+		findings = scannedFindingsByPath.get(node.path) ?? [];
 		focusedFindingId = null;
-		scanCompleted = false;
+		scanCompleted = scannedPaths.has(node.path);
 		resultsStale = false;
-		currentScanId = null;
+		currentScanId = scanIdsByPath.get(node.path) ?? null;
 		error = null;
 	}
 
 	async function handleScanAll() {
 		if (!folderRoot) return;
-		const files = flatFiles(folderRoot);
+		const files = flatFiles(folderRoot).filter((file) => Boolean(file.content));
 		error = null;
+		scanning = true;
 		scanCompleted = false;
 		resultsStale = false;
 		focusedFindingId = null;
+		currentScanId = null;
+		scannedPaths.clear();
+		scannedFindingsByPath.clear();
+		scanIdsByPath.clear();
+		if (selectedFile) findings = [];
 		scanProgress = { current: 0, total: files.length };
-		for (let i = 0; i < files.length; i++) {
-			const f = files[i];
-			if (!f.content || !f.language) continue;
-			try {
-				const result = await scanCode(f.content, f.language);
-				if (selectedFile?.path === f.path) {
-					findings = result.findings;
-					currentScanId = result.scan_id;
+		try {
+			const result = await scanProject(
+				files.map((file) => ({
+					path: file.path,
+					code: file.content ?? '',
+					language: file.language
+				}))
+			);
+			for (const fileResult of result.files) {
+				scannedFindingsByPath.set(fileResult.path, fileResult.findings);
+				scanIdsByPath.set(fileResult.path, fileResult.scan_id);
+				scannedPaths.add(fileResult.path);
+				if (selectedFile?.path === fileResult.path) {
+					findings = fileResult.findings;
+					currentScanId = fileResult.scan_id;
 					scanCompleted = true;
 				}
-				scannedPaths.add(f.path);
-			} catch { /* continue */ }
-			scanProgress = { current: i + 1, total: files.length };
+			}
+			scanProgress = { current: files.length, total: files.length };
+			if (selectedFile && scannedPaths.has(selectedFile.path)) {
+				scanCompleted = true;
+			}
+		} catch {
+			error = 'Cannot connect to makina server. Run: docker compose up -d --build backend';
+		} finally {
+			scanning = false;
+			scanProgress = null;
 		}
-		scanProgress = null;
 	}
 
 	function handleClearFolder() {
 		folderRoot = null;
 		selectedFile = null;
 		scannedPaths.clear();
+		scannedFindingsByPath.clear();
+		scanIdsByPath.clear();
 		scanProgress = null;
 	}
 
@@ -332,14 +433,17 @@
 
 	function handleFindingClose(id: string) {
 		findings = findings.filter((finding) => finding.id !== id);
+		if (selectedFile?.path) {
+			scannedFindingsByPath.set(selectedFile.path, findings);
+		}
 		if (focusedFindingId === id) focusedFindingId = null;
 	}
 </script>
 
-<div class="relative flex h-screen text-gray-100 overflow-hidden" style="background:#060a12;">
+<div class="mk-app-bg relative flex h-screen overflow-hidden text-[var(--mk-text)]">
 
 	<!-- Left rail: icon-only vertical tabs -->
-	<aside class="relative z-10 flex h-full w-16 shrink-0 flex-col bg-gray-950 border-r border-gray-800/80">
+	<aside class="mk-rail relative z-10 flex h-full w-16 shrink-0 flex-col border-r">
 		<nav class="no-scrollbar flex min-h-0 flex-1 flex-col gap-1 overflow-x-hidden overflow-y-auto p-2">
 			{#each VISIBLE_TABS as tab}
 				<button
@@ -349,22 +453,26 @@
 					class={[
 						'group relative flex items-center justify-center h-11 rounded-xl transition-all',
 						activeTab === tab
-							? 'bg-indigo-600/20 text-indigo-300'
-							: 'text-gray-600 hover:text-gray-400 hover:bg-gray-900'
+							? 'bg-violet-500/20 text-[var(--mk-text)] shadow-[inset_0_0_0_1px_rgba(139,92,246,0.24)]'
+							: 'text-gray-600 hover:text-[var(--mk-text-soft)] hover:bg-[var(--mk-bg-elevated)]'
 					].join(' ')}
 				>
 					<!-- Active indicator -->
 					{#if activeTab === tab}
-						<span class="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 bg-indigo-500 rounded-r-full"></span>
+						<span class="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-6 rounded-r-full bg-[var(--mk-copper)] shadow-[0_0_14px_rgba(185,130,82,0.4)]"></span>
 					{/if}
 					<!-- Tooltip -->
-					<span class="absolute left-full ml-3 px-2.5 py-1.5 bg-gray-800 text-gray-200 text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none border border-gray-700/60 shadow-xl z-50">
+					<span class="absolute left-full ml-3 px-2.5 py-1.5 bg-[var(--mk-bg-elevated)] text-[var(--mk-text)] text-xs rounded-lg whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none border border-[var(--mk-border-strong)] shadow-xl z-50">
 						{TAB_DESCRIPTIONS[tab]}
 					</span>
 					<span class="relative">
 						{#if tab === 'scan'}
 							<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
 								<path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+							</svg>
+						{:else if tab === 'graph'}
+							<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M7.5 14.25v2.25m3-4.5v4.5m3-6.75v6.75m3-9v9M6 20.25h12A2.25 2.25 0 0020.25 18V6A2.25 2.25 0 0018 3.75H6A2.25 2.25 0 003.75 6v12A2.25 2.25 0 006 20.25z" />
 							</svg>
 						{:else if tab === 'audit'}
 							<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
@@ -384,7 +492,7 @@
 							</svg>
 						{/if}
 						{#if tab === 'verify' && verifyCases.length > 0 && !PUBLIC_MODE}
-							<span class="absolute -top-1 -right-1.5 w-4 h-4 text-[10px] font-bold bg-indigo-500 text-white rounded-full flex items-center justify-center">
+							<span class="absolute -top-1 -right-1.5 w-4 h-4 text-[10px] font-bold bg-violet-500 text-white rounded-full flex items-center justify-center">
 								{verifyCases.length}
 							</span>
 						{/if}
@@ -392,16 +500,16 @@
 				</button>
 			{/each}
 		</nav>
-		<div class="flex h-9 shrink-0 items-center justify-center border-t border-gray-700 bg-gray-900 px-2">
+		<div class="flex h-9 shrink-0 items-center justify-center border-t border-[var(--mk-border)] bg-[var(--mk-bg-panel)] px-2">
 			<a
 				href={GITHUB_REPO_URL}
 				target="_blank"
 				rel="noreferrer"
 				aria-label="Open GitHub repository"
 				title="GitHub repository"
-				class="group relative flex h-7 w-full items-center justify-center rounded-lg text-gray-600 transition-all hover:bg-gray-800/60 hover:text-gray-300"
+				class="group relative flex h-7 w-full items-center justify-center rounded-lg text-gray-600 transition-all hover:bg-[var(--mk-bg-elevated)] hover:text-[var(--mk-text-soft)]"
 			>
-				<span class="absolute left-full ml-3 rounded-lg border border-gray-700/60 bg-gray-800 px-2.5 py-1.5 text-xs text-gray-200 opacity-0 shadow-xl transition-opacity pointer-events-none whitespace-nowrap group-hover:opacity-100 z-50">
+				<span class="absolute left-full ml-3 rounded-lg border border-[var(--mk-border-strong)] bg-[var(--mk-bg-elevated)] px-2.5 py-1.5 text-xs text-[var(--mk-text)] opacity-0 shadow-xl transition-opacity pointer-events-none whitespace-nowrap group-hover:opacity-100 z-50">
 					GitHub repository
 				</span>
 				<svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -416,7 +524,7 @@
 	</aside>
 
 	<!-- Main column -->
-	<div class="relative z-10 flex flex-col flex-1 min-w-0 min-h-0 bg-gray-950">
+	<div class="relative z-10 flex flex-col flex-1 min-w-0 min-h-0 bg-[var(--mk-bg)]">
 
 	<!-- Content -->
 		<div
@@ -424,7 +532,7 @@
 			style:display={activeTab === 'scan' ? 'flex' : 'none'}
 			aria-hidden={activeTab !== 'scan'}
 		>
-			<div class="lg:hidden flex h-11 shrink-0 items-center overflow-hidden border-b border-gray-800/80 bg-gray-950 px-3">
+			<div class="lg:hidden flex h-11 shrink-0 items-center overflow-hidden border-b border-[var(--mk-border)] bg-[var(--mk-bg-panel)] px-3">
 				<ScanPanel
 					{language}
 					onlanguagechange={handleLanguageChange}
@@ -439,7 +547,7 @@
 			     placeholder until a folder is loaded so users see the
 			     workspace layout from the first paint. -->
 			<div
-				class="relative hidden w-56 shrink-0 flex-col border-r border-gray-800/80 bg-gray-950 lg:flex xl:w-64"
+				class="relative hidden w-56 shrink-0 flex-col border-r border-[var(--mk-border)] bg-[var(--mk-bg-panel)] lg:flex xl:w-64"
 				ondragenter={handleExplorerDragEnter}
 				ondragover={handleExplorerDragOver}
 				ondragleave={handleExplorerDragLeave}
@@ -449,12 +557,12 @@
 			>
 				{#if explorerDragging}
 					<div
-						class="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-gray-950/90 px-4 text-center"
-						style="border:2px dashed #4f46e5;"
+						class="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-[var(--mk-bg-panel)] px-4 text-center"
+						style="border:2px dashed var(--mk-brand);"
 					>
-						<div class="flex h-12 w-12 items-center justify-center rounded-xl border border-indigo-500/40 bg-indigo-950/50">
+						<div class="flex h-12 w-12 items-center justify-center rounded-xl border border-violet-500/40 bg-violet-950/40">
 							<svg
-								class="h-6 w-6 text-indigo-300"
+								class="h-6 w-6 text-violet-200"
 								fill="none"
 								viewBox="0 0 24 24"
 								stroke="currentColor"
@@ -468,7 +576,7 @@
 							</svg>
 						</div>
 						<div class="space-y-1">
-							<p class="text-sm font-semibold text-indigo-200">
+							<p class="text-sm font-semibold text-violet-100">
 								Drop to {folderRoot ? 'replace workspace' : 'open workspace'}
 							</p>
 							<p class="text-xs text-gray-500">
@@ -485,17 +593,20 @@
 						{scanProgress}
 						onselect={handleSelectFile}
 						onscanall={handleScanAll}
+						onauditall={handleSendAllToAudit}
+						auditAllEnabled={auditAllFindingCount > 0 && !scanning}
+						auditAllCount={auditAllFindingCount}
 						onclear={handleClearFolder}
 					/>
 				{:else}
 					<div class="flex h-full flex-col">
-						<div class="flex items-center gap-2 h-11 px-3 border-b border-gray-800/80 shrink-0">
+						<div class="flex items-center gap-2 h-11 px-3 border-b border-[var(--mk-border)] shrink-0">
 							<span class="text-[10px] font-bold text-gray-500 uppercase tracking-wider truncate flex-1">
 								Explorer
 							</span>
 						</div>
 						<div class="flex flex-1 flex-col items-center justify-center gap-4 px-4 text-center">
-							<div class="w-14 h-14 rounded-xl bg-gray-900 flex items-center justify-center border border-dashed border-gray-700/60">
+							<div class="w-14 h-14 rounded-xl bg-[var(--mk-bg-elevated)] flex items-center justify-center border border-dashed border-[var(--mk-border-strong)]">
 								<svg
 									class="w-7 h-7 text-gray-500"
 									fill="none"
@@ -524,7 +635,7 @@
 			</div>
 
 			<!-- Editor -->
-			<div class="flex flex-1 flex-col min-h-0 border-r border-gray-800/60">
+			<div class="flex flex-1 flex-col min-h-0 border-r border-[var(--mk-border)]">
 				<CodeEditor
 					value={code}
 					onchange={handleCodeChange}
@@ -537,9 +648,9 @@
 			</div>
 
 			<!-- Findings panel -->
-			<div class="hidden lg:flex w-80 xl:w-96 shrink-0 flex-col bg-gray-950 border-l border-gray-800/80">
+			<div class="hidden lg:flex w-80 xl:w-96 shrink-0 flex-col bg-[var(--mk-bg-panel)] border-l border-[var(--mk-border)]">
 				<!-- Findings header with scan controls -->
-				<div class="flex h-11 shrink-0 items-center gap-2 overflow-hidden border-b border-gray-800/80 px-3">
+				<div class="flex h-11 shrink-0 items-center gap-2 overflow-hidden border-b border-[var(--mk-border)] px-3">
 					<ScanPanel
 						{language}
 						onlanguagechange={handleLanguageChange}
@@ -564,18 +675,18 @@
 				/>
 			</div>
 
-			<div class="lg:hidden flex max-h-[42vh] shrink-0 flex-col border-t border-gray-800/80 bg-gray-950">
-				<div class="flex h-11 shrink-0 items-center justify-between border-b border-gray-800/80 px-3">
+			<div class="lg:hidden flex max-h-[42vh] shrink-0 flex-col border-t border-[var(--mk-border)] bg-[var(--mk-bg-panel)]">
+				<div class="flex h-11 shrink-0 items-center justify-between border-b border-[var(--mk-border)] px-3">
 					<span class="text-[10px] font-bold uppercase tracking-wider text-gray-500">
 						Findings
 					</span>
 					<div class="flex items-center gap-2">
-						<span class="rounded border border-gray-800 bg-gray-900 px-2 py-0.5 text-[10px] font-semibold text-gray-400">
+						<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 py-0.5 text-[10px] font-semibold text-gray-400">
 							{findingCountText}
 						</span>
 						<button
 							onclick={() => { findings = []; scanCompleted = false; resultsStale = false; currentScanId = null; error = null; focusedFindingId = null; }}
-							class="p-1 rounded text-gray-600 hover:text-gray-400 hover:bg-gray-900 cursor-pointer"
+							class="p-1 rounded text-gray-600 hover:text-[var(--mk-text-soft)] hover:bg-[var(--mk-bg-elevated)] cursor-pointer"
 							aria-label="Clear findings"
 							title="Clear findings"
 						>
@@ -599,16 +710,21 @@
 				/>
 			</div>
 		</div>
-	{#if activeTab === 'verify'}
-		<div class="flex flex-1 min-h-0" style:display={activeTab === 'verify' ? 'flex' : 'none'} aria-hidden={activeTab !== 'verify'}>
-			<VerifyTab
-				cases={verifyCases}
-				onlabel={handleCaseLabel}
-				onsubmit={handleCaseSubmit}
-				onclose={handleCaseClose}
-			/>
-		</div>
-	{/if}
+		{#if activeTab === 'graph'}
+			<div class="flex flex-1 min-h-0" style:display={activeTab === 'graph' ? 'flex' : 'none'} aria-hidden={activeTab !== 'graph'}>
+				<GraphTab findings={graphFindings} {focusedFindingId} onselect={handleSelectFinding} />
+			</div>
+		{/if}
+		{#if activeTab === 'verify'}
+			<div class="flex flex-1 min-h-0" style:display={activeTab === 'verify' ? 'flex' : 'none'} aria-hidden={activeTab !== 'verify'}>
+				<VerifyTab
+					cases={verifyCases}
+					onlabel={handleCaseLabel}
+					onsubmit={handleCaseSubmit}
+					onclose={handleCaseClose}
+				/>
+			</div>
+		{/if}
 		<div
 			class="flex flex-1 min-h-0"
 			style:display={activeTab === 'audit' ? 'flex' : 'none'}
