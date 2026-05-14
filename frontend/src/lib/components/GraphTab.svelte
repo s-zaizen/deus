@@ -6,14 +6,16 @@
 		findings,
 		focusedFindingId = null,
 		onselect,
-		onlocate,
-		onaudit
+		onjump,
+		onaudit,
+		onreset
 	}: {
 		findings: Finding[];
 		focusedFindingId?: string | null;
 		onselect: (id: string) => void;
-		onlocate?: (id: string) => void;
+		onjump?: (node: TraceGraphNode) => void;
 		onaudit?: (id: string) => void;
+		onreset?: () => void;
 	} = $props();
 
 	type NodeKind = 'source' | 'function' | 'sink' | 'finding';
@@ -231,6 +233,7 @@
 			finding: true
 		};
 		resetSignal += 1;
+		onreset?.();
 	}
 
 	function handleNodeSelect(node: TraceGraphNode) {
@@ -239,8 +242,7 @@
 	}
 
 	function handleNodeLocate(node: TraceGraphNode) {
-		const findingId = node.meta?.findingId;
-		if (findingId) onlocate?.(findingId);
+		onjump?.(node);
 	}
 
 	function handleNodeAudit(node: TraceGraphNode) {
@@ -374,15 +376,17 @@
 				</div>
 			</div>
 		{:else}
-			<TraceGraphView
-				graph={filteredGraph}
-				variant="workspace"
-				{focusedFindingId}
-				{resetSignal}
-				onselectnode={handleNodeSelect}
-				onlocatenode={handleNodeLocate}
-				onauditnode={handleNodeAudit}
-			/>
+			{#key resetSignal}
+				<TraceGraphView
+					graph={filteredGraph}
+					variant="workspace"
+					{focusedFindingId}
+					{resetSignal}
+					onselectnode={handleNodeSelect}
+					onlocatenode={handleNodeLocate}
+					onauditnode={handleNodeAudit}
+				/>
+			{/key}
 		{/if}
 	</div>
 </div>

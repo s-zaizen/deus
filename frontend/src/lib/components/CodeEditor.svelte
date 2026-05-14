@@ -11,6 +11,7 @@
 		language,
 		findings = [],
 		focusedLine = null,
+		focusToken = 0,
 		onFolderDrop,
 		filename,
 		readonly = false
@@ -20,6 +21,7 @@
 		language: Language;
 		findings?: Finding[];
 		focusedLine?: number | null;
+		focusToken?: number;
 		onFolderDrop?: (item: DataTransferItem) => void;
 		filename?: string;
 		readonly?: boolean;
@@ -254,18 +256,26 @@
 
 	// Scroll to focused line
 	$effect(() => {
-		if (!editor || !monacoRef || !focusedLine) return;
+		if (!editor || !monacoRef) return;
+		focusToken;
+		focusDecs?.clear();
+		focusDecs = null;
+		if (!focusedLine) return;
 		const monaco = monacoRef;
 		editor.revealLineInCenter(focusedLine, monaco.editor.ScrollType.Smooth);
 		editor.setPosition({ lineNumber: focusedLine, column: 1 });
+		editor.focus();
 
-		focusDecs?.clear();
 		focusDecs = editor.createDecorationsCollection([{
 			range: new monaco.Range(focusedLine, 1, focusedLine, 1),
 			options: {
 				isWholeLine: true,
 				className: 'finding-line-focused',
-				glyphMarginClassName: 'finding-glyph-focused'
+				glyphMarginClassName: 'finding-glyph-focused',
+				overviewRuler: {
+					color: '#d8c7aa',
+					position: monaco.editor.OverviewRulerLane.Center
+				}
 			}
 		}]);
 	});

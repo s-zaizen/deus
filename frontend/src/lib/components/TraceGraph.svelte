@@ -408,12 +408,6 @@
 		onselectnode?.(node);
 	}
 
-	function focusFinding(node: TraceGraphNode) {
-		selectedNodeId = node.id;
-		onselectnode?.(node);
-		if (node.meta?.findingId) onlocatenode?.(node);
-	}
-
 	function locateNode(node: TraceGraphNode) {
 		onlocatenode?.(node);
 	}
@@ -804,21 +798,14 @@
 						{/if}
 					</div>
 
-					<div class="grid grid-cols-3 gap-2">
+					<div class="grid grid-cols-2 gap-2">
 						<button
 							type="button"
-							onclick={() => focusFinding(selectedNode)}
-							class="rounded border border-[var(--mk-border)] px-2 py-1.5 text-xs font-semibold text-[var(--mk-text-soft)] transition hover:border-[var(--mk-brand)] hover:text-white"
-						>
-							{selectedNode.meta?.findingId ? 'Focus finding' : 'Select node'}
-						</button>
-						<button
-							type="button"
-							disabled={!selectedNode.meta?.findingId}
+							disabled={selectedNode.line_start == null && !selectedNode.meta?.findingId}
 							onclick={() => locateNode(selectedNode)}
 							class="rounded border border-[var(--mk-border)] px-2 py-1.5 text-xs font-semibold text-[var(--mk-text-soft)] transition hover:border-[var(--mk-brand)] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
 						>
-							Locate code
+							Jump Code
 						</button>
 						<button
 							type="button"

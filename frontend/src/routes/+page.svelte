@@ -25,7 +25,7 @@
 	import { readFolder, flatFiles } from '$lib/folder';
 	import { PLACEHOLDERS } from '$lib/placeholders';
 	import { PUBLIC_MODE } from '$lib/flags';
-	import type { AuditCase, Finding, Language, Label, Stats, VerifyCase, KnowledgeCase, FileNode } from '$lib/types';
+	import type { AuditCase, Finding, Language, Label, Stats, VerifyCase, KnowledgeCase, FileNode, TraceGraphNode } from '$lib/types';
 
 	type Tab = 'scan' | 'graph' | 'audit' | 'verify' | 'knowledge' | 'model';
 
@@ -54,6 +54,8 @@
 	let stats = $state<Stats | null>(null);
 	let error = $state<string | null>(null);
 	let focusedFindingId = $state<string | null>(null);
+	let focusedLineOverride = $state<number | null>(null);
+	let focusedLineToken = $state(0);
 
 	let auditCase = $state<AuditCase | null>(null);
 	let verifyCases = $state<VerifyCase[]>([]);
@@ -68,7 +70,7 @@
 	let explorerDragging = $state(false);
 
 	const focusedFinding = $derived(findings.find((f) => f.id === focusedFindingId));
-	const focusedLine = $derived(focusedFinding?.line_start ?? null);
+	const focusedLine = $derived(focusedLineOverride ?? focusedFinding?.line_start ?? null);
 	const currentFilename = $derived(selectedFile?.name);
 	const findingCountText = $derived(`${findings.length} finding${findings.length === 1 ? '' : 's'}`);
 	const graphFindings = $derived.by(() => {
@@ -153,6 +155,7 @@
 		code = PLACEHOLDERS[lang];
 		findings = [];
 		focusedFindingId = null;
+		focusedLineOverride = null;
 		scanCompleted = false;
 		resultsStale = false;
 		currentScanId = null;
@@ -164,6 +167,7 @@
 		const hasCurrentFindings = findings.length > 0;
 		code = value;
 		focusedFindingId = null;
+		focusedLineOverride = null;
 		resultsStale = hasCurrentFindings;
 		if (!hasCurrentFindings) scanCompleted = false;
 		currentScanId = hasCurrentFindings ? currentScanId : null;
@@ -177,6 +181,7 @@
 		error = null;
 		findings = [];
 		focusedFindingId = null;
+		focusedLineOverride = null;
 		currentScanId = null;
 		try {
 			const result = await scanCode(code, language);
@@ -308,11 +313,12 @@
 
 	function handleSelectFinding(id: string) {
 		focusedFindingId = id;
+		focusedLineOverride = null;
+		focusedLineToken += 1;
 	}
 
 	function handleFocusFinding(id: string) {
-		handleSelectFinding(id);
-		activeTab = 'scan';
+		jumpFindingToCode(id);
 	}
 
 	function findingSourceFile(id: string): FileNode | null {
@@ -323,6 +329,59 @@
 			}
 		}
 		return null;
+	}
+
+	function traceSourceFile(node: TraceGraphNode): FileNode | null {
+		if (!folderRoot) return null;
+		if (node.file) {
+			const normalized = node.file.replace(/^\.?\//, '');
+			const matched = flatFiles(folderRoot).find((file) =>
+				file.path === normalized || file.path.endsWith(`/${normalized}`) || normalized.endsWith(`/${file.path}`)
+			);
+			if (matched) return matched;
+		}
+		const relatedId = node.meta?.findingId ?? node.meta?.relatedFindingIds?.[0];
+		return relatedId ? findingSourceFile(relatedId) : null;
+	}
+
+	function loadFileForFocus(file: FileNode | null) {
+		if (!file?.content) return;
+		selectedFile = file;
+		code = file.content;
+		language = file.language ?? 'auto';
+		findings = scannedFindingsByPath.get(file.path) ?? [];
+		scanCompleted = scannedPaths.has(file.path);
+		resultsStale = false;
+		currentScanId = scanIdsByPath.get(file.path) ?? null;
+		error = null;
+	}
+
+	function jumpFindingToCode(id: string, lineOverride: number | null = null) {
+		const sourceFile = findingSourceFile(id);
+		if (sourceFile) loadFileForFocus(sourceFile);
+		const targetFinding = (sourceFile ? scannedFindingsByPath.get(sourceFile.path) : findings)?.find(
+			(finding) => finding.id === id
+		);
+		focusedFindingId = id;
+		focusedLineOverride = lineOverride ?? targetFinding?.line_start ?? null;
+		focusedLineToken += 1;
+		activeTab = 'scan';
+	}
+
+	function handleJumpTraceNode(node: TraceGraphNode) {
+		const sourceFile = traceSourceFile(node);
+		if (sourceFile) loadFileForFocus(sourceFile);
+
+		const findingId = node.meta?.findingId ?? node.meta?.relatedFindingIds?.[0] ?? null;
+		const targetFinding = findingId
+			? (sourceFile ? scannedFindingsByPath.get(sourceFile.path) : findings)?.find((finding) => finding.id === findingId)
+			: null;
+		const line = node.line_start ?? targetFinding?.line_start ?? null;
+
+		focusedFindingId = targetFinding?.id ?? null;
+		focusedLineOverride = line;
+		focusedLineToken += 1;
+		activeTab = 'scan';
 	}
 
 	function handleAuditFinding(id: string) {
@@ -341,6 +400,7 @@
 			createdAt: new Date().toISOString()
 		};
 		focusedFindingId = id;
+		focusedLineOverride = null;
 		activeTab = 'audit';
 	}
 
@@ -348,6 +408,8 @@
 		const root = await readFolder(item);
 		if (!root) return;
 		folderRoot = root;
+		focusedFindingId = null;
+		focusedLineOverride = null;
 		scannedPaths.clear();
 		scannedFindingsByPath.clear();
 		scanIdsByPath.clear();
@@ -396,6 +458,7 @@
 		language = node.language ?? 'auto';
 		findings = scannedFindingsByPath.get(node.path) ?? [];
 		focusedFindingId = null;
+		focusedLineOverride = null;
 		scanCompleted = scannedPaths.has(node.path);
 		resultsStale = false;
 		currentScanId = scanIdsByPath.get(node.path) ?? null;
@@ -410,6 +473,7 @@
 		scanCompleted = false;
 		resultsStale = false;
 		focusedFindingId = null;
+		focusedLineOverride = null;
 		currentScanId = null;
 		scannedPaths.clear();
 		scannedFindingsByPath.clear();
@@ -449,6 +513,8 @@
 	function handleClearFolder() {
 		folderRoot = null;
 		selectedFile = null;
+		focusedFindingId = null;
+		focusedLineOverride = null;
 		scannedPaths.clear();
 		scannedFindingsByPath.clear();
 		scanIdsByPath.clear();
@@ -465,7 +531,11 @@
 		if (selectedFile?.path) {
 			scannedFindingsByPath.set(selectedFile.path, findings);
 		}
-		if (focusedFindingId === id) focusedFindingId = null;
+		if (focusedFindingId === id) {
+			focusedFindingId = null;
+			focusedLineOverride = null;
+			focusedLineToken += 1;
+		}
 	}
 </script>
 
@@ -671,6 +741,7 @@
 					{language}
 					{findings}
 					{focusedLine}
+					focusToken={focusedLineToken}
 					onFolderDrop={folderRoot ? undefined : handleFolderDrop}
 					filename={currentFilename}
 				/>
@@ -714,7 +785,7 @@
 							{findingCountText}
 						</span>
 						<button
-							onclick={() => { findings = []; scanCompleted = false; resultsStale = false; currentScanId = null; error = null; focusedFindingId = null; }}
+							onclick={() => { findings = []; scanCompleted = false; resultsStale = false; currentScanId = null; error = null; focusedFindingId = null; focusedLineOverride = null; focusedLineToken += 1; }}
 							class="p-1 rounded text-gray-600 hover:text-[var(--mk-text-soft)] hover:bg-[var(--mk-bg-elevated)] cursor-pointer"
 							aria-label="Clear findings"
 							title="Clear findings"
@@ -745,8 +816,13 @@
 					findings={graphFindings}
 					{focusedFindingId}
 					onselect={handleSelectFinding}
-					onlocate={handleFocusFinding}
+					onjump={handleJumpTraceNode}
 					onaudit={handleAuditFinding}
+					onreset={() => {
+						focusedFindingId = null;
+						focusedLineOverride = null;
+						focusedLineToken += 1;
+					}}
 				/>
 			</div>
 		{/if}
