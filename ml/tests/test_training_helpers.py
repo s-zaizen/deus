@@ -168,6 +168,31 @@ def test_balanced_sample_weights_upweights_minority_class():
     assert weights.sum() == pytest.approx(4.0)
 
 
+def test_training_sample_weights_downweight_repeated_groups():
+    weights = training._training_sample_weights(
+        np.array([1, 0, 1, 0]),
+        ["CVE-1", "CVE-1", "CVE-2", "CVE-3"],
+    )
+
+    assert weights.sum() == pytest.approx(4.0)
+    assert weights[0] == pytest.approx(weights[1])
+    assert weights[0] < weights[2]
+    assert weights[2] == pytest.approx(weights[3])
+    assert weights[0] + weights[1] > weights[2]
+
+
+def test_training_sample_weights_keep_ungrouped_rows_singleton_weighted():
+    weights = training._training_sample_weights(
+        np.array([1, 0, 1, 0]),
+        [None, None, "CVE-1", "CVE-1"],
+    )
+
+    assert weights.sum() == pytest.approx(4.0)
+    assert weights[0] == pytest.approx(weights[1])
+    assert weights[0] > weights[2]
+    assert weights[2] == pytest.approx(weights[3])
+
+
 def test_dataset_hash_is_stable_for_same_rows():
     embeddings = np.array(
         [np.full(768, 0.1, dtype=np.float32), np.full(768, 0.2, dtype=np.float32)]

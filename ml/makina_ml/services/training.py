@@ -5,11 +5,13 @@ delegate → return) and the actual training pipeline (read labels →
 group-aware split → fit → eval → persist → reset analyzer cache) has
 one home that's easy to test and reason about.
 
-The pipeline preserves bit-for-bit behaviour:
+The pipeline preserves the route-level training contract:
   * group_key column is read NULL-tolerantly (older DBs lack it)
   * `GroupShuffleSplit` is used when ≥ 2 distinct CVE groups are
     present; otherwise a stratified 80/20 split is used; otherwise
     the full dataset is used (no held-out validation)
+  * class-balanced sample weights are tempered by group frequency so
+    one CVE/import batch cannot dominate the loss
   * after eval the model is refit on the *full* dataset so the
     production artifact uses every label
   * metrics are persisted to `MAKINA_METRICS` (default
@@ -30,6 +32,7 @@ from pathlib import Path
 import numpy as np
 
 logger = logging.getLogger("makina_ml")
+GROUP_WEIGHT_EXPONENT = 0.2
 
 
 def model_stage(total: int) -> str:
@@ -181,6 +184,33 @@ def _balanced_sample_weights(y_arr: np.ndarray) -> np.ndarray:
     return weights
 
 
+def _group_normalized_sample_weights(
+    weights: np.ndarray, groups: list[str | None]
+) -> np.ndarray:
+    """Temper repeated samples from the same source group.
+
+    Bulk CVE imports can produce many near-duplicate findings from one CVE.
+    Class balancing alone still lets that one group dominate the loss, while
+    full inverse-frequency weighting overcorrects. A small exponent preserves
+    useful repeated evidence while reducing corpus-level group bias.
+    """
+    if len(weights) == 0 or len(groups) != len(weights):
+        return weights.astype(np.float32)
+
+    group_ids = [g if g is not None else f"_solo_{i}" for i, g in enumerate(groups)]
+    _, inverse, counts = np.unique(group_ids, return_inverse=True, return_counts=True)
+    normalized = weights.astype(np.float32).copy()
+    normalized /= counts[inverse].astype(np.float32) ** GROUP_WEIGHT_EXPONENT
+    total = float(normalized.sum())
+    if total > 0:
+        normalized *= len(normalized) / total
+    return normalized.astype(np.float32)
+
+
+def _training_sample_weights(y_arr: np.ndarray, groups: list[str | None]) -> np.ndarray:
+    return _group_normalized_sample_weights(_balanced_sample_weights(y_arr), groups)
+
+
 def _dataset_hash(
     embeddings: np.ndarray, labels: list[str], groups: list[str | None]
 ) -> str:
@@ -271,7 +301,7 @@ def train_from_arrays(
 
     x_arr = embeddings.astype(np.float32)
     y_arr = np.array(y_list)
-    sample_weight = _balanced_sample_weights(y_arr)
+    sample_weight = _training_sample_weights(y_arr, groups)
     tp_count = int(y_arr.sum())
     fp_count = int(len(y_arr) - tp_count)
 
@@ -340,6 +370,9 @@ def train_from_arrays(
         "stage": model_stage(len(y_list)),
         "elapsed_ms": elapsed_ms,
         "class_weighting": "balanced",
+        "group_weighting": "tempered-inverse-frequency",
+        "group_weight_exponent": GROUP_WEIGHT_EXPONENT,
+        "sample_weighting": "class-balanced+tempered-group-normalized",
         "skipped_invalid_vectors": skipped_invalid_vectors,
         **_group_metrics(groups),
         "split": (

@@ -82,6 +82,9 @@ def test_train_full_pipeline_with_group_split(feedback_db: Path, tmp_path: Path)
     assert persisted["tp"] == 20
     assert persisted["fp"] == 20
     assert persisted["class_weighting"] == "balanced"
+    assert persisted["group_weighting"] == "tempered-inverse-frequency"
+    assert persisted["group_weight_exponent"] == training.GROUP_WEIGHT_EXPONENT
+    assert persisted["sample_weighting"] == "class-balanced+tempered-group-normalized"
     assert persisted["group_count"] == 20
     assert persisted["grouped_samples"] == 40
     assert persisted["solo_samples"] == 0

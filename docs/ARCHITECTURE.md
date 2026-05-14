@@ -381,11 +381,14 @@ states such as closed or needs-review cases out of the GBDT without changing
 the public Verify workflow.
 
 Each successful retrain writes a deterministic `dataset_hash`, short
-`run_id`, split metadata, class-balanced weighting mode, skipped-vector
-count, and group statistics to both `metrics.json` and `training_runs`.
+`run_id`, split metadata, sample-weighting mode, skipped-vector count, and
+group statistics to both `metrics.json` and `training_runs`.
 Class-balanced sample weights are applied during validation and the final
 full-dataset fit so heavily imbalanced local feedback does not drown out the
-minority class.
+minority class. Those weights are also tempered by `group_key` frequency,
+currently with a `count^-0.2` multiplier, which keeps a single CVE/import
+group with many near-duplicate findings from dominating the training loss
+without discarding useful repeated evidence.
 
 ### Why the labeled index is not the primary matcher
 
@@ -480,7 +483,9 @@ when at least two distinct groups are present, so a paired TP/FP twin
 never straddles the 80/20 train/val boundary — random `train_test_split`
 would leak the answer into validation when the same CVE's vulnerable
 and patched methods land on opposite sides. Live-scan rows have no
-group key and fall back to the previous stratified split.
+group key and fall back to the previous stratified split. During fitting,
+the same `group_key` also drives tempered inverse-frequency sample weighting
+so large CVE groups are down-weighted without being erased.
 
 A secondary retrain fires every 10 individual feedback labels as a
 supplementary signal path.

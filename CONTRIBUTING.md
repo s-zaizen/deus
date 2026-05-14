@@ -135,8 +135,8 @@ docker compose restart backend ml
 #    `group_key` so the GBDT trainer's GroupShuffleSplit keeps every
 #    paired TP/FP twin on the same side of the train/val split. The
 #    trainer reads the `training_examples` view, applies class-balanced
-#    sample weights, writes metrics.json, and appends one `training_runs`
-#    row for each successful route-driven retrain.
+#    and tempered group-frequency sample weights, writes metrics.json, and
+#    appends one `training_runs` row for each successful route-driven retrain.
 #    --count 0 ingests every record.
 python ml/scripts/bulk_import.py \
   --jsonl third_party/datasets/cvefixes/samples.jsonl \
