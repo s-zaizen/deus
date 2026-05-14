@@ -153,7 +153,7 @@
 					</div>
 				{/if}
 
-				<p class="mt-2 text-xs italic text-gray-700">Retrains on every Verify Submit</p>
+				<p class="mt-2 text-xs italic text-gray-700">Retrains on every Review Submit</p>
 			</section>
 
 			<!-- Accumulated Labels -->
@@ -191,7 +191,7 @@
 					</div>
 				{:else}
 					<p class="py-1 text-center text-xs text-gray-700">
-						No labels yet — verify cases to accumulate knowledge.
+						No labels yet — review cases to accumulate knowledge.
 					</p>
 				{/if}
 			</section>
@@ -296,6 +296,61 @@
 										? 'Weak separation — confidences cluster near 0.5.'
 										: 'Near zero separation — GBDT adds little signal; collect more diverse labels.'}
 							</p>
+						</div>
+					{/if}
+					<!-- Dataset / Run metadata -->
+					{@const showMeta =
+						metrics.run_id != null ||
+						metrics.dataset_hash != null ||
+						metrics.class_weighting != null ||
+						(metrics.skipped_invalid_vectors ?? 0) > 0 ||
+						(metrics.group_count ?? 0) > 0 ||
+						(metrics.grouped_samples ?? 0) > 0 ||
+						(metrics.solo_samples ?? 0) > 0}
+					{#if showMeta}
+						<div class="mt-3 rounded-lg border border-gray-800/60 bg-gray-900/50 p-2.5">
+							<h4 class="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-600">
+								Dataset / Run
+							</h4>
+							<div class="space-y-1 text-xs">
+								{#if metrics.run_id != null}
+									<div class="flex justify-between">
+										<span class="text-gray-600">Run</span>
+										<span class="font-mono text-gray-400">{metrics.run_id}</span>
+									</div>
+								{/if}
+								{#if metrics.dataset_hash != null}
+									<div class="flex justify-between">
+										<span class="text-gray-600">Dataset</span>
+										<span class="font-mono text-gray-400" title={metrics.dataset_hash}>
+											{metrics.dataset_hash.slice(0, 7)}
+										</span>
+									</div>
+								{/if}
+								{#if metrics.class_weighting != null}
+									<div class="flex justify-between">
+										<span class="text-gray-600">Class weighting</span>
+										<span class="text-indigo-400">{metrics.class_weighting}</span>
+									</div>
+								{/if}
+								{#if (metrics.group_count ?? 0) > 0 || (metrics.grouped_samples ?? 0) > 0 || (metrics.solo_samples ?? 0) > 0}
+									<div class="flex justify-between">
+										<span class="text-gray-600">Groups</span>
+										<span class="tabular-nums text-gray-400">
+											{metrics.group_count ?? 0} / {metrics.grouped_samples ?? 0} grouped
+											{#if (metrics.solo_samples ?? 0) > 0}
+												· {metrics.solo_samples} solo
+											{/if}
+										</span>
+									</div>
+								{/if}
+								{#if (metrics.skipped_invalid_vectors ?? 0) > 0}
+									<div class="flex justify-between">
+										<span class="text-gray-600">Skipped invalid</span>
+										<span class="tabular-nums text-amber-500">{metrics.skipped_invalid_vectors}</span>
+									</div>
+								{/if}
+							</div>
 						</div>
 					{/if}
 				{/if}

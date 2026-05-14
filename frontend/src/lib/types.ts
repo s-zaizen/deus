@@ -25,12 +25,94 @@ export interface Finding {
   is_uncertain: boolean;
   cwe: string | null;
   source: string;
+  trace_graph?: TraceGraph | null;
+  exploration_plan?: ExplorationPlan | null;
+}
+
+export interface TraceGraph {
+  nodes: TraceGraphNode[];
+  edges: TraceGraphEdge[];
+}
+
+export interface TraceGraphNode {
+  id: string;
+  kind: "source" | "function" | "sink" | "finding" | string;
+  label: string;
+  file?: string | null;
+  line_start?: number | null;
+  line_end?: number | null;
+  detail?: string | null;
+  meta?: TraceGraphNodeMeta | null;
+}
+
+export interface TraceGraphNodeMeta {
+  findingId?: string | null;
+  relatedFindingIds?: string[];
+  severity?: Severity | null;
+  severities?: Severity[];
+  cwe?: string | null;
+  cwes?: string[];
+  message?: string | null;
+  ruleId?: string | null;
+  source?: string | null;
+  confidence?: number | null;
+  ordinal?: number | null;
+}
+
+export interface TraceGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  kind: "flows_to" | "reports" | string;
+  label?: string | null;
+}
+
+export interface ExplorationPlan {
+  kind: string;
+  title: string;
+  objective: string;
+  priority: number;
+  rationale: string;
+  steps: ExplorationStep[];
+  feedback_signals: string[];
+  required_evidence: string[];
+}
+
+export interface ExplorationStep {
+  id: string;
+  kind: "source" | "function" | "sink" | "finding" | string;
+  label: string;
+  file?: string | null;
+  line_start?: number | null;
+  line_end?: number | null;
+  detail?: string | null;
 }
 
 export interface ScanResponse {
   scan_id: string;
   findings: Finding[];
   language: string;
+  lines_scanned: number;
+}
+
+export interface ProjectScanFileRequest {
+  path: string;
+  code: string;
+  language?: Language;
+}
+
+export interface ProjectScanFileResult {
+  path: string;
+  scan_id: string;
+  findings: Finding[];
+  language: Language;
+  lines_scanned: number;
+}
+
+export interface ProjectScanResponse {
+  scan_id: string;
+  files: ProjectScanFileResult[];
+  language: Language;
   lines_scanned: number;
 }
 
@@ -56,9 +138,16 @@ export interface ModelMetrics {
   val_recall?: number;
   val_prob_mean_tp?: number | null;
   val_prob_mean_fp?: number | null;
+  run_id?: string | null;
+  dataset_hash?: string | null;
+  class_weighting?: string | null;
+  skipped_invalid_vectors?: number | null;
+  group_count?: number | null;
+  grouped_samples?: number | null;
+  solo_samples?: number | null;
 }
 
-export interface VerifyCase {
+export interface ReviewCase {
   caseNo: number;
   cveId?: string | null;
   code: string;
@@ -113,4 +202,5 @@ export interface AuditStepResult {
 export interface AuditRunResponse {
   results: AuditStepResult[];
   reportMarkdown: string;
+  reportSections: import("$lib/auditReport").AuditReportSection[];
 }

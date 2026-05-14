@@ -1,4 +1,6 @@
 import type { HighlighterCore } from 'shiki/core';
+import { severityTone } from '$lib/theme';
+import type { Severity } from '$lib/types';
 
 let instance: HighlighterCore | null = null;
 let loading: Promise<HighlighterCore> | null = null;
@@ -31,13 +33,6 @@ async function getInstance(): Promise<HighlighterCore> {
 	return loading;
 }
 
-const SEV_BG: Record<string, string> = {
-	critical: 'rgba(239,68,68,0.12)',
-	high: 'rgba(249,115,22,0.10)',
-	medium: 'rgba(234,179,8,0.10)',
-	low: 'rgba(96,165,250,0.10)'
-};
-
 export async function preloadHighlighter(): Promise<void> {
 	await getInstance();
 }
@@ -50,7 +45,7 @@ export async function highlightSnippet(
 	severity: string
 ): Promise<string> {
 	const h = await getInstance();
-	const bg = SEV_BG[severity] ?? 'transparent';
+	const bg = severityTone(severity as Severity).highlight;
 	const safeLang = lang === 'auto' ? 'text' : lang;
 
 	return h.codeToHtml(code, {

@@ -17,7 +17,10 @@ use serde::Deserialize;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::api::models::{AuditStepRunRequest, AuditStepRunResponse, Finding, Language, Severity};
+use crate::api::models::{
+    AuditStepRunRequest, AuditStepRunResponse, ExplorationPlan, Finding, Language, Severity,
+    TraceGraph,
+};
 
 // ── Wire DTOs (kept private — callers see domain types) ────────────────────
 
@@ -39,6 +42,10 @@ struct MlFinding {
     code_snippet: String,
     confidence: f32,
     cwe: Option<String>,
+    #[serde(default)]
+    trace_graph: Option<TraceGraph>,
+    #[serde(default)]
+    exploration_plan: Option<ExplorationPlan>,
 }
 
 #[derive(Deserialize, Default)]
@@ -262,7 +269,7 @@ impl MlClient {
         Ok(body)
     }
 
-    /// Fire-and-forget train — used after every Verify Submit and
+    /// Fire-and-forget train — used after every Review Submit and
     /// every 10 individual feedback labels.
     pub fn spawn_train(&self, req_id: &str) {
         let http = self.http.clone();
@@ -431,6 +438,8 @@ fn ml_finding_to_domain(mf: MlFinding, source: &str) -> Finding {
         is_uncertain,
         cwe: mf.cwe,
         source: source.to_string(),
+        trace_graph: mf.trace_graph,
+        exploration_plan: mf.exploration_plan,
     }
 }
 
@@ -523,6 +532,8 @@ mod tests {
             code_snippet: "".into(),
             confidence: conf,
             cwe: None,
+            trace_graph: None,
+            exploration_plan: None,
         };
         // Uncertain band is [0.45, 0.65] inclusive.
         assert!(ml_finding_to_domain(mk(0.50), "ml").is_uncertain);
@@ -544,6 +555,8 @@ mod tests {
             code_snippet: "snip".into(),
             confidence: 0.9,
             cwe: Some("CWE-78".into()),
+            trace_graph: None,
+            exploration_plan: None,
         };
         let f = ml_finding_to_domain(mf, "taint");
         assert_eq!(f.source, "taint");

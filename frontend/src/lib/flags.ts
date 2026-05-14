@@ -10,6 +10,6 @@ import { PUBLIC_MAKINA_PUBLIC_MODE } from '$env/static/public';
 
 const TRUTHY = new Set(['1', 'true', 'TRUE', 'True', 'yes', 'on']);
 
-/** True when the deployment is the publicly-visible demo — Verify
+/** True when the deployment is the publicly-visible demo — Review
  *  learning writes and LLM Audit are disabled; the model is read-only. */
 export const PUBLIC_MODE: boolean = TRUTHY.has(PUBLIC_MAKINA_PUBLIC_MODE ?? '');

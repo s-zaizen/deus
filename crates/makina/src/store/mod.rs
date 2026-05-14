@@ -83,6 +83,38 @@ pub fn init_db() -> Result<()> {
     )?;
     // Idempotent ALTER for upgrades from earlier schemas without group_key.
     let _ = feedback_conn.execute("ALTER TABLE findings ADD COLUMN group_key TEXT", []);
+    feedback_conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS label_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            finding_id TEXT NOT NULL,
+            label TEXT NOT NULL CHECK(label IN ('tp','fp','closed','needs_review')),
+            source TEXT NOT NULL DEFAULT 'human',
+            reason TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS training_runs (
+            run_id TEXT PRIMARY KEY,
+            trained_at TEXT NOT NULL,
+            samples INTEGER NOT NULL,
+            tp INTEGER NOT NULL,
+            fp INTEGER NOT NULL,
+            dataset_hash TEXT,
+            split TEXT,
+            model_path TEXT,
+            metrics_json TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE VIEW IF NOT EXISTS training_examples AS
+            SELECT id, code_hash, feature_vector, rule_id, language, line_number,
+                   model_version, confidence, label, labeled_at, created_at, group_key
+            FROM findings
+            WHERE label IN ('tp','fp') AND feature_vector IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_findings_trainable
+            ON findings(label, group_key, language)
+            WHERE label IN ('tp','fp') AND feature_vector IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS idx_label_events_finding
+            ON label_events(finding_id, created_at);",
+    )?;
 
     // ── verify.db ───────────────────────────────────────────────────────────────
     let verify_conn = open_verify()?;
@@ -241,10 +273,17 @@ pub fn save_finding(
 pub fn update_label(finding_id: &str, label: &str) -> Result<()> {
     let conn = open_feedback()?;
     let now = Utc::now().to_rfc3339();
-    conn.execute(
+    let updated = conn.execute(
         "UPDATE findings SET label = ?1, labeled_at = ?2 WHERE id = ?3",
         params![label, now, finding_id],
     )?;
+    if updated > 0 {
+        conn.execute(
+            "INSERT INTO label_events (finding_id, label, source, created_at)
+             VALUES (?1, ?2, 'human', ?3)",
+            params![finding_id, label, now],
+        )?;
+    }
     Ok(())
 }
 
@@ -252,7 +291,7 @@ pub fn get_stats() -> Result<Stats> {
     let conn = open_feedback()?;
 
     let total: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM findings WHERE label IS NOT NULL",
+        "SELECT COUNT(*) FROM findings WHERE label IN ('tp','fp')",
         [],
         |r| r.get(0),
     )?;
@@ -288,7 +327,7 @@ pub fn get_stats() -> Result<Stats> {
     })
 }
 
-// ── Verify queue ──────────────────────────────────────────────────────────────
+// ── Review queue (`verify.db`) ────────────────────────────────────────────────
 
 pub fn add_queue_item(
     cve_id: Option<&str>,
@@ -495,12 +534,56 @@ mod tests {
 
     #[test]
     #[serial]
+    fn update_label_records_append_only_label_event() {
+        let _s = fresh_db();
+        save_finding("a", "h", "r", "c", 1, 0.5, None, None).unwrap();
+
+        update_label("a", "tp").unwrap();
+        update_label("a", "fp").unwrap();
+
+        let conn = open_feedback().unwrap();
+        let events: Vec<String> = conn
+            .prepare("SELECT label FROM label_events WHERE finding_id = ?1 ORDER BY event_id")
+            .unwrap()
+            .query_map(["a"], |row| row.get(0))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(events, vec!["tp".to_string(), "fp".to_string()]);
+    }
+
+    #[test]
+    #[serial]
+    fn training_examples_view_only_exposes_trainable_rows() {
+        let _s = fresh_db();
+        let emb = vec![0_u8; 768 * 4];
+        save_finding("trainable", "h", "r", "c", 1, 0.5, Some(&emb), None).unwrap();
+        save_finding("unlabeled", "h", "r", "c", 2, 0.5, Some(&emb), None).unwrap();
+        save_finding("no-embedding", "h", "r", "c", 3, 0.5, None, None).unwrap();
+        update_label("trainable", "tp").unwrap();
+        update_label("no-embedding", "fp").unwrap();
+
+        let conn = open_feedback().unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM training_examples", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let id: String = conn
+            .query_row("SELECT id FROM training_examples", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
+        assert_eq!(id, "trainable");
+    }
+
+    #[test]
+    #[serial]
     fn add_then_submit_moves_case_from_queue_to_knowledge() {
         let _s = fresh_db();
         let (case_no, _) =
             add_queue_item(Some("CVE-2024-77"), "code body", "python", "[]").unwrap();
 
-        // Initially in the verify queue, absent from knowledge.
+        // Initially in the Review queue, absent from knowledge.
         assert_eq!(get_queue_items().unwrap().len(), 1);
         assert!(get_knowledge_items().unwrap().is_empty());
 

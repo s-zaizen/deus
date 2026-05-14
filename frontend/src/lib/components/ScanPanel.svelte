@@ -46,7 +46,7 @@
 		onchange={(e) => onlanguagechange((e.currentTarget as HTMLSelectElement).value as Language)}
 		aria-label="Language"
 		class={[
-			'rounded border border-gray-700 bg-gray-800 py-1 text-xs font-medium text-gray-300 focus:border-indigo-500 focus:outline-none cursor-pointer',
+			'rounded border border-[var(--mk-border-strong)] bg-[var(--mk-bg-elevated)] py-1 text-xs font-medium text-[var(--mk-text-soft)] focus:border-[#8b5cf6] focus:outline-none cursor-pointer',
 			compact ? 'w-[5.5rem] shrink-0 px-1.5' : 'min-w-[6rem] flex-1 sm:flex-none px-2.5'
 		].join(' ')}
 	>
@@ -62,8 +62,8 @@
 			'flex items-center justify-center gap-1 rounded-lg text-xs font-semibold transition-all',
 			compact ? 'shrink-0 px-2 py-1 min-w-[4rem]' : 'min-w-[5.5rem] px-3.5 py-1.5 gap-1.5',
 			scanning
-				? 'bg-green-800/80 text-green-300 cursor-not-allowed'
-				: 'bg-green-600 hover:bg-green-500 text-white cursor-pointer'
+				? 'bg-teal-950/80 text-teal-300 cursor-not-allowed'
+				: 'bg-teal-600 hover:bg-teal-500 text-white shadow-[0_0_18px_rgba(20,184,166,0.16)] cursor-pointer'
 		].join(' ')}
 	>
 		{#if scanning}
@@ -80,7 +80,7 @@
 		{/if}
 	</button>
 
-	<div class={compact ? 'hidden' : 'hidden h-4 w-px bg-gray-700/60 sm:block'}></div>
+	<div class={compact ? 'hidden' : 'hidden h-4 w-px bg-[var(--mk-border-strong)] sm:block'}></div>
 
 	<button
 		onclick={onaction}
@@ -89,8 +89,8 @@
 			'flex items-center justify-center gap-1 rounded-lg border text-xs font-semibold transition-all',
 			compact ? 'shrink-0 px-2 py-1 min-w-[4.5rem]' : 'min-w-[7rem] px-3.5 py-1.5 gap-1.5',
 			actionEnabled && !scanning
-				? 'border-indigo-500/60 text-indigo-300 hover:bg-indigo-900/30 hover:border-indigo-500 cursor-pointer'
-				: 'border-gray-800 text-gray-700 cursor-not-allowed'
+				? 'border-violet-500/70 text-violet-200 hover:bg-violet-950/35 hover:border-violet-400 shadow-[0_0_18px_rgba(79,70,229,0.10)] cursor-pointer'
+				: 'border-[var(--mk-border)] text-gray-700 cursor-not-allowed'
 		].join(' ')}
 	>
 		<span class="whitespace-nowrap">{sendLabel}</span>

@@ -6,6 +6,7 @@ For other languages we fall back to regex-based heuristics.
 The goal is not perfect analysis but richer embedding context
 so CodeBERT can learn cross-function vulnerability patterns.
 """
+
 import ast
 import re
 from typing import Optional
@@ -76,6 +77,7 @@ def _find_enclosing(functions: dict, line: int) -> Optional[dict]:
 
 # ─── Python ──────────────────────────────────────────────────────────────────
 
+
 def _python_functions(code: str) -> dict:
     try:
         tree = ast.parse(code)
@@ -110,10 +112,10 @@ def _python_functions(code: str) -> dict:
 # ─── JavaScript / TypeScript ─────────────────────────────────────────────────
 
 _JS_FUNC_RE = re.compile(
-    r"(?:function\s+(\w+)\s*\(|"          # function foo(
-    r"(?:const|let|var)\s+(\w+)\s*=\s*"   # const foo =
-    r"(?:async\s+)?(?:function\s*\(|"     #   function( or
-    r"\(.*?\)\s*=>))",                     #   (...) =>
+    r"(?:function\s+(\w+)\s*\(|"  # function foo(
+    r"(?:const|let|var)\s+(\w+)\s*=\s*"  # const foo =
+    r"(?:async\s+)?(?:function\s*\(|"  #   function( or
+    r"\(.*?\)\s*=>))",  #   (...) =>
 )
 _CALL_RE = re.compile(r"\b(\w+)\s*\(")
 
@@ -133,10 +135,13 @@ def _js_functions(code: str) -> dict:
                 depth += lines[j].count("{") - lines[j].count("}")
                 j += 1
             src = "\n".join(body_lines)
-            callees = list(dict.fromkeys(
-                c for c in _CALL_RE.findall(src)
-                if c not in ("if", "for", "while", "switch", "catch")
-            ))
+            callees = list(
+                dict.fromkeys(
+                    c
+                    for c in _CALL_RE.findall(src)
+                    if c not in ("if", "for", "while", "switch", "catch")
+                )
+            )
             result[name] = {
                 "source": src,
                 "callees": callees,
@@ -170,10 +175,13 @@ def _go_functions(code: str) -> dict:
                 depth += lines[j].count("{") - lines[j].count("}")
                 j += 1
             src = "\n".join(body_lines)
-            callees = list(dict.fromkeys(
-                c for c in _CALL_RE.findall(src)
-                if c not in ("if", "for", "range", "make", "len", "append")
-            ))
+            callees = list(
+                dict.fromkeys(
+                    c
+                    for c in _CALL_RE.findall(src)
+                    if c not in ("if", "for", "range", "make", "len", "append")
+                )
+            )
             result[name] = {
                 "source": src,
                 "callees": callees,
@@ -189,11 +197,13 @@ def _go_functions(code: str) -> dict:
 # ─── Generic (Java, Ruby, Rust, C, C++) ──────────────────────────────────────
 
 _GENERIC_FUNC_RE = {
-    "java":   re.compile(r"(?:public|private|protected|static|\s)+[\w<>\[\]]+\s+(\w+)\s*\("),
-    "ruby":   re.compile(r"^\s*def\s+(\w+)"),
-    "rust":   re.compile(r"^\s*(?:pub\s+)?fn\s+(\w+)"),
-    "c":      re.compile(r"^(?:[\w\s\*]+)\s+(\w+)\s*\([^;]*\)\s*\{"),
-    "cpp":    re.compile(r"^(?:[\w\s\*:~<>]+)\s+(\w+)\s*\([^;]*\)\s*(?:const\s*)?\{"),
+    "java": re.compile(
+        r"(?:public|private|protected|static|\s)+[\w<>\[\]]+\s+(\w+)\s*\("
+    ),
+    "ruby": re.compile(r"^\s*def\s+(\w+)"),
+    "rust": re.compile(r"^\s*(?:pub\s+)?fn\s+(\w+)"),
+    "c": re.compile(r"^(?:[\w\s\*]+)\s+(\w+)\s*\([^;]*\)\s*\{"),
+    "cpp": re.compile(r"^(?:[\w\s\*:~<>]+)\s+(\w+)\s*\([^;]*\)\s*(?:const\s*)?\{"),
 }
 
 
@@ -232,10 +242,9 @@ def _generic_functions(code: str, language: str) -> dict:
                     depth += lines[j].count("{") - lines[j].count("}")
                     j += 1
             src = "\n".join(body_lines)
-            callees = list(dict.fromkeys(
-                c for c in _CALL_RE.findall(src)
-                if len(c) > 2
-            ))
+            callees = list(
+                dict.fromkeys(c for c in _CALL_RE.findall(src) if len(c) > 2)
+            )
             result[name] = {
                 "source": src,
                 "callees": callees,

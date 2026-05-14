@@ -44,10 +44,26 @@ DEFAULT_DB = REPO_ROOT / "third_party/datasets/cvefixes/CVEfixes.db"
 DEFAULT_OUT = REPO_ROOT / "third_party/datasets/cvefixes/samples_pairs.jsonl"
 
 SKIP_FILENAME_SUBSTR = (
-    "CHANGELOG", "README", "LICENSE", "NEWS", "AUTHORS",
-    "/test/", "/tests/", "_test.", "test_",
-    ".md", ".rst", ".txt", ".json", ".yaml", ".yml",
-    ".xml", ".html", ".svg", "/doc/", "/docs/",
+    "CHANGELOG",
+    "README",
+    "LICENSE",
+    "NEWS",
+    "AUTHORS",
+    "/test/",
+    "/tests/",
+    "_test.",
+    "test_",
+    ".md",
+    ".rst",
+    ".txt",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".xml",
+    ".html",
+    ".svg",
+    "/doc/",
+    "/docs/",
 )
 
 
@@ -145,7 +161,15 @@ def main() -> int:
     }
 
     with args.out.open("w", encoding="utf-8") as fh:
-        for (diff_parsed, code_before, code_after, lang, filename, cve, cwe) in conn.execute(sql):
+        for (
+            diff_parsed,
+            code_before,
+            code_after,
+            lang,
+            filename,
+            cve,
+            cwe,
+        ) in conn.execute(sql):
             stats["rows"] += 1
 
             if _should_skip_file(filename):
@@ -166,8 +190,12 @@ def main() -> int:
                 stats["skipped_parse"] += 1
                 continue
 
-            deleted_spans = sorted(_cluster_lines(parsed.get("deleted") or [], gap=args.gap))
-            added_spans = sorted(_cluster_lines(parsed.get("added") or [], gap=args.gap))
+            deleted_spans = sorted(
+                _cluster_lines(parsed.get("deleted") or [], gap=args.gap)
+            )
+            added_spans = sorted(
+                _cluster_lines(parsed.get("added") or [], gap=args.gap)
+            )
 
             n = min(len(deleted_spans), len(added_spans))
             if n == 0:
@@ -178,7 +206,9 @@ def main() -> int:
                 del_start, del_end = deleted_spans[i]
                 add_start, add_end = added_spans[i]
 
-                before_hunk = _slice_context(code_before, del_start, del_end, args.radius)
+                before_hunk = _slice_context(
+                    code_before, del_start, del_end, args.radius
+                )
                 after_hunk = _slice_context(code_after, add_start, add_end, args.radius)
 
                 def _bad(h: str) -> bool:
@@ -196,7 +226,9 @@ def main() -> int:
                     stats["length_skips"] += 1
                     continue
 
-                key = hashlib.sha1((before_hunk + "\x00" + after_hunk).encode("utf-8")).hexdigest()
+                key = hashlib.sha1(
+                    (before_hunk + "\x00" + after_hunk).encode("utf-8")
+                ).hexdigest()
                 if key in seen_pairs:
                     stats["dedup_skips"] += 1
                     continue

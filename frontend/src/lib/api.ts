@@ -1,4 +1,15 @@
-import type { Finding, ScanResponse, Stats, Language, Label, VerifyCase, KnowledgeCase, ModelMetrics } from './types';
+import type {
+	Finding,
+	ScanResponse,
+	ProjectScanFileRequest,
+	ProjectScanResponse,
+	Stats,
+	Language,
+	Label,
+	ReviewCase,
+	KnowledgeCase,
+	ModelMetrics
+} from './types';
 
 import { PUBLIC_API_URL } from '$env/static/public';
 const BASE = PUBLIC_API_URL || 'http://localhost:7373';
@@ -10,6 +21,16 @@ export async function scanCode(code: string, language: Language): Promise<ScanRe
 		body: JSON.stringify({ code, language })
 	});
 	if (!res.ok) throw new Error(`Scan failed: ${res.status}`);
+	return res.json();
+}
+
+export async function scanProject(files: ProjectScanFileRequest[]): Promise<ProjectScanResponse> {
+	const res = await fetch(`${BASE}/api/scan/project`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ files })
+	});
+	if (!res.ok) throw new Error(`Project scan failed: ${res.status}`);
 	return res.json();
 }
 
@@ -65,9 +86,9 @@ export async function addManualFinding(
 	return res.json();
 }
 
-// ── Verify queue ───────────────────────────────────────────────────────────────
+// ── Review queue (`/api/verify/queue`) ─────────────────────────────────────────
 
-interface BackendVerifyCase {
+interface BackendReviewCase {
 	case_no: number;
 	cve_id: string | null;
 	code: string;
@@ -76,7 +97,7 @@ interface BackendVerifyCase {
 	submitted_at: string;
 }
 
-function mapCase(b: BackendVerifyCase): VerifyCase {
+function mapCase(b: BackendReviewCase): ReviewCase {
 	return {
 		caseNo: b.case_no,
 		cveId: b.cve_id,
@@ -88,30 +109,30 @@ function mapCase(b: BackendVerifyCase): VerifyCase {
 	};
 }
 
-export async function getVerifyQueue(): Promise<VerifyCase[]> {
+export async function getReviewQueue(): Promise<ReviewCase[]> {
 	const res = await fetch(`${BASE}/api/verify/queue`);
 	if (!res.ok) throw new Error(`Queue fetch failed: ${res.status}`);
-	const items: BackendVerifyCase[] = await res.json();
+	const items: BackendReviewCase[] = await res.json();
 	return items.map(mapCase);
 }
 
-export async function addToVerifyQueue(
+export async function addToReviewQueue(
 	cveId: string | null,
 	code: string,
 	language: Language,
 	findings: Finding[]
-): Promise<VerifyCase> {
+): Promise<ReviewCase> {
 	const res = await fetch(`${BASE}/api/verify/queue`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ cve_id: cveId, code, language, findings })
 	});
 	if (!res.ok) throw new Error(`Queue add failed: ${res.status}`);
-	const item: BackendVerifyCase = await res.json();
+	const item: BackendReviewCase = await res.json();
 	return mapCase(item);
 }
 
-export async function closeVerifyCase(caseNo: number): Promise<void> {
+export async function closeReviewCase(caseNo: number): Promise<void> {
 	const res = await fetch(`${BASE}/api/verify/queue/${caseNo}`, {
 		method: 'DELETE'
 	});

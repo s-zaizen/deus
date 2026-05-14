@@ -28,6 +28,19 @@ cd frontend
 npm audit --audit-level=low
 ```
 
+Dependency update hygiene:
+
+- Automated dependency update PRs are governed by `renovate.json` and
+  should wait until a release is at least 90 days old before branches or
+  PRs are created. Release timestamps are required; packages without
+  usable release-age metadata should be handled manually.
+- npm workspaces also carry `.npmrc` with `min-release-age=90` so
+  npm versions that support release-age quarantine avoid resolving
+  newly published packages during local installs and Docker builds.
+- Manual dependency bumps should follow the same 90-day quarantine unless
+  the change is an explicit security fix, a broken-build unblock, or a
+  user-approved exception. Document exceptions in the PR or commit.
+
 The frontend keeps Vitest on 3.x so test tooling reuses the root Vite
 6.x line instead of pulling an older nested Vite. `package.json` also
 overrides SvelteKit's transitive `cookie` dependency to `0.7.2` because
@@ -37,13 +50,29 @@ manual chunks in `vite.config.ts`; importing `monaco-editor` directly
 rebuilds it as one large production chunk.
 
 Audit LLM integration is initiated by the static frontend, but the fixed
-workflow, prompt assembly, and final Markdown report contract live in the
-Rust backend. Provider calls run through the ML service with the official
-Python `openai` and `anthropic` packages. Do not commit API keys or add
-server-side key persistence; the Audit UI may keep keys in memory or, at
-the user's explicit choice, browser `localStorage`. The final report must
-map scanner findings one-to-one to `MAKINA-001`, `MAKINA-002`, etc.; keep
-that contract backend-owned.
+workflow, prompt assembly, structured report schema, and final Markdown
+report contract live in the Rust backend. Provider calls run through the
+ML service with the official Python `openai` and `anthropic` packages.
+Do not commit API keys or add server-side key persistence; the Audit UI
+may keep keys in memory or, at the user's explicit choice, browser
+`localStorage`. The final report must map scanner findings one-to-one to
+`MAKINA-001`, `MAKINA-002`, etc. and render fixed sections from structured
+fields (`summary`, `vulnerability_details`, `impact`, `proof_of_concept`,
+`remediation`, `verification_notes`, `confidence`); keep that contract
+backend-owned.
+
+Learning-loop storage has one rule: write the current TP/FP state through
+the backend helpers, not by editing `feedback.db` ad hoc. `findings.label`
+is the current label, `label_events` is the append-only human audit trail,
+`training_examples` is the trainer-facing view of rows with TP/FP labels
+and embeddings, and `training_runs` records every successful route-driven
+retrain with its dataset hash and metrics JSON. If you change label states,
+training filters, or metrics fields, update Rust store tests and Python
+training tests together.
+
+The frontend Scan tab must not finalize TP/FP labels directly. Scan can
+enqueue a finding into Review with `POST /api/verify/queue`, but the label
+becomes training data only after the Review tab submits `POST /api/knowledge`.
 
 Scanner detector changes must preserve the language-agnostic pipeline
 shape: semgrep, CodeBERT semantic analysis, taint analysis, and structural
@@ -52,6 +81,19 @@ deduplicates findings. New property-pattern detectors should avoid
 project-specific API names as their only signal and should include focused
 tests that cover a real trigger, a generalized trigger, and a quiet
 sanitized/non-sink case.
+
+Folder scans must use the project scan path rather than looping over
+independent `/api/scan` calls. `POST /api/scan/project` groups files by
+language, runs the normal detector pipeline on each grouped source bundle,
+then maps findings back to file-local lines. If detector behavior changes
+around cross-file taint, add both a positive multi-function case and a
+quiet safe-sink case such as parameterized SQL. Taint evidence graphs are
+part of the scan response contract; when detector or remapping behavior
+changes, keep `trace_graph.nodes`, `trace_graph.edges`, and
+`exploration_plan.steps` aligned with the final finding file/line metadata.
+The exploration plan is validation guidance, not proof of exploitability,
+so tests should assert that it remains attached to taint findings without
+changing TP/FP learning semantics.
 
 ## CVEfixes Import & Training
 
@@ -104,11 +146,14 @@ docker compose exec ml rm -f \
   /root/.makina/model.json /root/.makina/metrics.json
 docker compose restart backend ml
 
-# 4. Bulk-import. Each case becomes a verify-queue entry with the full
+# 4. Bulk-import. Each case becomes a Review queue entry with the full
 #    method as `code` and one manual finding per range; findings carry
 #    the per-record TP/FP label and the case's CVE id is sent as
 #    `group_key` so the GBDT trainer's GroupShuffleSplit keeps every
-#    paired TP/FP twin on the same side of the train/val split.
+#    paired TP/FP twin on the same side of the train/val split. The
+#    trainer reads the `training_examples` view, applies class-balanced
+#    and tempered group-frequency sample weights, writes metrics.json, and
+#    appends one `training_runs` row for each successful route-driven retrain.
 #    --count 0 ingests every record.
 python ml/scripts/bulk_import.py \
   --jsonl third_party/datasets/cvefixes/samples.jsonl \
@@ -160,7 +205,7 @@ docker cp makina-ml-1:/tmp/model.json models/v1.0.9/model.json
 docker cp makina-ml-1:/tmp/metrics.json models/v1.0.9/metrics.json
 
 # 3. Build the Knowledge-tab showcase DB. Public deployments disable
-#    the live Verify Submit path, so the runtime knowledge.db would
+#    the live Review Submit path, so the runtime knowledge.db would
 #    otherwise be empty. seed_knowledge.py converts the same
 #    samples.jsonl we trained on into a populated SQLite, baked into
 #    the image alongside model.json.
@@ -192,7 +237,7 @@ running a separate object-store hop on every revision boot.
 crates/makina/src/   Rust core — hexagonal + vertical-slice
   api/               router composition + shared API DTOs
   features/          one module per feature (scan, labels, findings,
-                     verify, knowledge, model)
+                     review queue via verify module, knowledge, model)
   infra/ml.rs        outbound adapter for the Python ML service
   store/             SQLite data layer
   logging.rs         tracing + request_id middleware
@@ -203,10 +248,16 @@ ml/makina_ml/        Python ML service (FastAPI)
                      domain modules (CodeBERT, taint, structural patterns, call graph, features)
 frontend/src/        SvelteKit UI (Svelte 5 Runes)
   routes/            +page.svelte (state + layout coordinator)
-  lib/components/    Scan / Audit / Verify / Knowledge / Model tab components
+  lib/components/    Scan / Trace / Audit / Review / Knowledge / Model tab components
   lib/audit.ts       Audit run client over /api/audit/run
+  lib/auditReport.ts Shared MAKINA report section splitting / ID mapping
   lib/api.ts         fetch wrappers (PUBLIC_API_URL)
+  lib/markdown.ts    Shared Markdown parser for report preview and PDF export
+  lib/reportPdf.ts   Client-side Audit PDF generation with pdfmake
+  lib/theme.ts       Shared Makina theme tokens for UI severity and branding
   lib/placeholders.ts  per-language sample snippets for the Scan tab
+samples/vulnerable-code/
+                     Intentionally vulnerable local scanner fixtures
 docs/                Architecture and design documentation
 .claude/             Claude Code configuration
   commands/          Slash commands — vuln-add, vuln-verify, vuln-add-verify-with-claude
@@ -215,7 +266,7 @@ docs/                Architecture and design documentation
   settings.json      Hook configuration
 AGENTS.md            Codex instructions for this repo
 .codex/              Codex configuration and playbooks
-  commands/          Vulnerability queue / verification workflows
+  commands/          Vulnerability queue / review workflows
   checks/            Explicit post-edit check helpers
   hooks/             Git pre-push hook for the full suite
   rules/             Path-scoped lint/style rules (backend, ml, frontend)
@@ -240,10 +291,10 @@ Public mode strips every learning-loop write: `/api/feedback`,
 `POST /api/knowledge`, `/api/retrain`, and the Python `/train`. It also
 strips hosted Audit execution (`POST /api/audit/run`) so public users
 cannot accidentally send OpenAI or Anthropic API keys to the makina.sh
-backend. The frontend must show disabled-state notices for Verify and
-Audit when `PUBLIC_MAKINA_PUBLIC_MODE` is enabled. `/api/scan` remains
-available and still applies the baked model, but it skips writing
-unlabeled findings into `feedback.db`.
+backend. The frontend must show disabled-state notices for Review and
+Audit when `PUBLIC_MAKINA_PUBLIC_MODE` is enabled. `/api/scan` and
+`/api/scan/project` remain available and still apply the baked model, but
+they skip writing unlabeled findings into `feedback.db`.
 
 For large scans, `MAKINA_EMBED_BATCH_SIZE` controls Python CodeBERT
 batching (default `32`). Lower it when running on memory-constrained
@@ -287,14 +338,14 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 | `.claude`    | Claude Code slash commands |
 | `.codex`     | Codex instructions, rules, and playbooks |
 | `api`        | HTTP API contract changes  |
-| `verify`     | Verify queue / labeling    |
+| `review`     | Review queue / labeling    |
 | `scan`       | Scan pipeline              |
 | `learning`   | ML training / GBDT         |
 
 **Examples:**
 
 ```
-feat(verify): add persistent queue with SQLite backend
+feat(review): add persistent queue with SQLite backend
 fix(ml): handle single-class training gracefully
 perf(scan): run semgrep, CodeBERT, and taint in parallel
 chore: add Dockerfile multi-stage build

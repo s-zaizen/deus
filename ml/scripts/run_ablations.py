@@ -50,6 +50,7 @@ def _load_embedder():
     if "/ml" not in sys.path:
         sys.path.insert(0, "/ml")
     from makina_ml import embedder  # noqa: E402
+
     embedder.ensure_loaded()
     while not embedder.is_ready():
         print("waiting for embedder…", flush=True)
@@ -72,22 +73,25 @@ def _embed_all(embedder, codes: list[str], batch: int = BATCH) -> np.ndarray:
 
 CONFIGS = [
     # name, flags  — toggle off blocks to disable them
-    ("full",            dict()),
-    ("no-cwe",          dict(no_cwe=True)),
-    ("no-lang",         dict(no_lang=True)),
-    ("no-stats",        dict(no_stats=True)),
-    ("no-own-emb",      dict(no_own_emb=True)),
-    ("no-delta",        dict(no_delta=True)),
-    ("delta-only",      dict(no_own_emb=True, no_stats=True, no_cwe=True, no_lang=True)),
-    ("own-emb-only",    dict(no_delta=True, no_stats=True, no_cwe=True, no_lang=True)),
-    ("meta-only",       dict(no_own_emb=True, no_delta=True)),
+    ("full", dict()),
+    ("no-cwe", dict(no_cwe=True)),
+    ("no-lang", dict(no_lang=True)),
+    ("no-stats", dict(no_stats=True)),
+    ("no-own-emb", dict(no_own_emb=True)),
+    ("no-delta", dict(no_delta=True)),
+    ("delta-only", dict(no_own_emb=True, no_stats=True, no_cwe=True, no_lang=True)),
+    ("own-emb-only", dict(no_delta=True, no_stats=True, no_cwe=True, no_lang=True)),
+    ("meta-only", dict(no_own_emb=True, no_delta=True)),
     # "Best of effective" combos derived from the first ablation pass:
     # delta carries ~14pt, stats ~11pt, cwe ~1pt; own_emb and lang are ~0.
-    ("delta+stats",     dict(no_own_emb=True, no_cwe=True, no_lang=True)),
+    ("delta+stats", dict(no_own_emb=True, no_cwe=True, no_lang=True)),
     ("delta+stats+cwe", dict(no_own_emb=True, no_lang=True)),
-    ("delta+cwe",       dict(no_own_emb=True, no_stats=True, no_lang=True)),
-    ("stats+cwe",       dict(no_own_emb=True, no_delta=True, no_lang=True)),
-    ("no-lang-no-own",  dict(no_own_emb=True, no_lang=True)),  # alias of delta+stats+cwe; sanity
+    ("delta+cwe", dict(no_own_emb=True, no_stats=True, no_lang=True)),
+    ("stats+cwe", dict(no_own_emb=True, no_delta=True, no_lang=True)),
+    (
+        "no-lang-no-own",
+        dict(no_own_emb=True, no_lang=True),
+    ),  # alias of delta+stats+cwe; sanity
 ]
 
 
@@ -111,9 +115,13 @@ def _build_feat(emb_self, emb_other, stats_pair, cwe_oh, lang_oh, flags):
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--pairs", type=Path, default=Path("/tmp/samples_pairs.jsonl"))
-    ap.add_argument("--metrics-out", type=Path, default=Path("/root/.makina/ablations.json"))
+    ap.add_argument(
+        "--metrics-out", type=Path, default=Path("/root/.makina/ablations.json")
+    )
     ap.add_argument("--cwe-topk", type=int, default=20)
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument(
@@ -154,7 +162,10 @@ def main() -> int:
     if args.emb_cache.exists():
         cached = np.load(args.emb_cache)
         if cached.shape == (expected_n, EMBED_DIM):
-            print(f"loaded cached embeddings from {args.emb_cache} (shape {cached.shape})", flush=True)
+            print(
+                f"loaded cached embeddings from {args.emb_cache} (shape {cached.shape})",
+                flush=True,
+            )
             all_embs = cached
         else:
             print(
@@ -195,6 +206,7 @@ def main() -> int:
 
     # Same group split for every config so they're directly comparable.
     from sklearn.model_selection import GroupShuffleSplit
+
     pair_idx = np.arange(n)
     gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
     train_pairs_idx, val_pairs_idx = next(gss.split(pair_idx, groups=groups_per_pair))
@@ -231,9 +243,14 @@ def main() -> int:
 
         t1 = time.perf_counter()
         model = xgb.XGBClassifier(
-            n_estimators=300, max_depth=6, learning_rate=0.1,
-            subsample=0.8, colsample_bytree=0.8,
-            eval_metric="logloss", random_state=42, n_jobs=-1,
+            n_estimators=300,
+            max_depth=6,
+            learning_rate=0.1,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            eval_metric="logloss",
+            random_state=42,
+            n_jobs=-1,
         )
         model.fit(X[train_mask], y[train_mask])
         train_t = time.perf_counter() - t1
@@ -263,10 +280,15 @@ def main() -> int:
             "val_delta": round(delta, 4),
         }
         summary.append(row)
-        print(f"  {name:14s}  dim={feat_dim:5d}  acc={acc:.4f}  Δ={delta:+.4f}  ({train_t:.1f}s)", flush=True)
+        print(
+            f"  {name:14s}  dim={feat_dim:5d}  acc={acc:.4f}  Δ={delta:+.4f}  ({train_t:.1f}s)",
+            flush=True,
+        )
 
     args.metrics_out.parent.mkdir(parents=True, exist_ok=True)
-    args.metrics_out.write_text(json.dumps({"summary": summary}, indent=2, ensure_ascii=False))
+    args.metrics_out.write_text(
+        json.dumps({"summary": summary}, indent=2, ensure_ascii=False)
+    )
     print(f"\nsaved → {args.metrics_out}", flush=True)
     return 0
 

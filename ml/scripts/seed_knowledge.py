@@ -62,8 +62,14 @@ def _severity_for(cwe: str | None) -> str:
     if not cwe:
         return "medium"
     high = {
-        "CWE-78", "CWE-77", "CWE-89", "CWE-94", "CWE-502",
-        "CWE-120", "CWE-787", "CWE-416",
+        "CWE-78",
+        "CWE-77",
+        "CWE-89",
+        "CWE-94",
+        "CWE-502",
+        "CWE-120",
+        "CWE-787",
+        "CWE-416",
     }
     mid = {"CWE-22", "CWE-79", "CWE-352", "CWE-918", "CWE-400", "CWE-611"}
     if cwe in high:

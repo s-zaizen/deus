@@ -8,7 +8,7 @@
 //!   model is fixed, so every endpoint that mutates labels, triggers
 //!   retraining, or forwards request-scoped LLM provider secrets is
 //!   removed from the router and returns 404.
-//! * **dev mode** (default) — full Verify → train loop is wired up.
+//! * **dev mode** (default) — full Review → train loop is wired up.
 //!
 //! We picked a hand-rolled struct over the OpenFeature Rust SDK because
 //! the latter is still alpha as of the time of writing; once it
@@ -18,7 +18,7 @@
 #[derive(Debug, Clone, Copy)]
 pub struct Flags {
     /// True when the deployment is publicly visible and must not accept
-    /// learning-loop writes (feedback, manual findings, verify queue
+    /// learning-loop writes (feedback, manual findings, review queue
     /// submit, knowledge submit, retrain) or hosted LLM audit calls that
     /// would receive user provider API keys.
     pub public_mode: bool,

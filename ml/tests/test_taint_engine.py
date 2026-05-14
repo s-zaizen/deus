@@ -39,6 +39,21 @@ def handle_request():
     findings = _findings(code, "python")
     cwes = {f["cwe"] for f in findings}
     assert "CWE-78" in cwes, f"taint engine missed os.system sink: {findings}"
+    finding = next(f for f in findings if f["cwe"] == "CWE-78")
+    graph = finding["trace_graph"]
+    assert {node["kind"] for node in graph["nodes"]} >= {
+        "source",
+        "sink",
+        "finding",
+    }
+    assert any(edge["kind"] == "flows_to" for edge in graph["edges"])
+    assert any(edge["kind"] == "reports" for edge in graph["edges"])
+    plan = finding["exploration_plan"]
+    assert plan["kind"] == "source_to_sink"
+    assert plan["steps"][0]["kind"] == "source"
+    assert plan["steps"][-1]["kind"] == "finding"
+    assert plan["required_evidence"]
+    assert any("runtime coverage" in signal for signal in plan["feedback_signals"])
 
 
 # ── JS arrow-function broker — regression for the recent fix ─────────────────
@@ -118,6 +133,49 @@ func handler(w http.ResponseWriter, r *http.Request) {
 """
     findings = _findings(code, "go")
     assert any(f["cwe"] == "CWE-78" for f in findings)
+
+
+# ── Negative cases: parameterized SQL is not a taint finding ────────────────
+
+
+def test_python_parameterized_sql_is_not_taint():
+    code = """\
+from flask import request
+
+def handle(cursor):
+    name = request.args.get("name", "")
+    return cursor.execute("SELECT id FROM users WHERE name = ?", (name,))
+"""
+    findings = _findings(code, "python")
+    assert not any(f["cwe"] == "CWE-89" for f in findings)
+
+
+def test_javascript_parameterized_sql_is_not_taint():
+    code = """\
+app.get('/user', (req, res) => {
+  const name = req.query.name || '';
+  db.query('SELECT id FROM users WHERE name = ?', [name], (err, rows) => {
+    res.json(rows);
+  });
+});
+"""
+    findings = _findings(code, "javascript")
+    assert not any(f["cwe"] == "CWE-89" for f in findings)
+
+
+def test_go_parameterized_sql_is_not_taint():
+    code = """\
+package main
+
+import "net/http"
+
+func handler(w http.ResponseWriter, r *http.Request) {
+    name := r.URL.Query().Get("name")
+    db.Query("SELECT id FROM users WHERE name = ?", name)
+}
+"""
+    findings = _findings(code, "go")
+    assert not any(f["cwe"] == "CWE-89" for f in findings)
 
 
 # ── Negative case: no source → no taint finding ─────────────────────────────

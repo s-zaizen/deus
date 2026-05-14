@@ -8,6 +8,8 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+from .sql_safety import has_unsafe_sql_sink
+
 RULES_DIR = Path(os.environ.get("SEMGREP_RULES_DIR", "/opt/semgrep-rules"))
 CUSTOM_RULES = Path(os.environ.get("SEMGREP_CUSTOM_RULES", "/opt/semgrep-custom"))
 
@@ -83,6 +85,12 @@ def _parse(results: list, rules_path: Path, source_lines: list | None = None) ->
         else:
             matched = ""
             embed_snippet = ""
+
+        if cwe == "CWE-89" and source_lines:
+            ctx_start = max(0, line_start - 5)
+            ctx_end = min(len(source_lines), line_end + 5)
+            if not has_unsafe_sql_sink("\n".join(source_lines[ctx_start:ctx_end])):
+                continue
 
         findings.append(
             {

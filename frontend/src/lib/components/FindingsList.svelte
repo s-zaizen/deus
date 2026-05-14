@@ -12,8 +12,10 @@
 		language,
 		focusedFindingId = null,
 		onlabel,
+		onreview,
 		onclose,
-		onfocus
+		onfocus,
+		isQueuedForReview = () => false
 	}: {
 		error?: string | null;
 		findings: Finding[];
@@ -22,9 +24,11 @@
 		resultsStale?: boolean;
 		language: Language;
 		focusedFindingId?: string | null;
-		onlabel: (id: string, label: Label) => Promise<void>;
+		onlabel?: (id: string, label: Label) => Promise<void>;
+		onreview?: (id: string) => Promise<void> | void;
 		onclose?: (id: string) => Promise<void> | void;
 		onfocus: (id: string) => void;
+		isQueuedForReview?: (id: string) => boolean;
 	} = $props();
 
 	const emptyTitle = $derived(
@@ -48,13 +52,13 @@
 
 	{#if resultsStale && findings.length > 0}
 		<div class="rounded-lg border border-yellow-800/80 bg-yellow-950/40 p-3 text-xs leading-relaxed text-yellow-200">
-			Code changed after this scan. Run Scan again before sending these findings to Verify.
+			Code changed after this scan. Run Scan again before sending these findings to Audit or Review.
 		</div>
 	{/if}
 
 	{#if PUBLIC_MODE && findings.length > 0}
 		<div class="rounded-lg border border-amber-900/70 bg-amber-950/20 p-3 text-xs leading-relaxed text-amber-100/80">
-			Public demo mode is read-only. TP/FP labels and case closing are disabled.
+			Public demo mode is read-only. Review queue writes and case closing are disabled.
 		</div>
 	{/if}
 
@@ -85,9 +89,11 @@
 				{finding}
 				{language}
 				{onlabel}
+				{onreview}
 				{onclose}
 				onfocus={() => onfocus(finding.id)}
 				focused={finding.id === focusedFindingId}
+				queuedForReview={isQueuedForReview(finding.id)}
 				readonly={resultsStale || PUBLIC_MODE}
 			/>
 		</div>

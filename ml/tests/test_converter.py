@@ -12,7 +12,9 @@ from pathlib import Path
 
 import pytest
 
-CONVERTER_PATH = Path(__file__).resolve().parents[1] / "scripts" / "converters" / "cvefixes.py"
+CONVERTER_PATH = (
+    Path(__file__).resolve().parents[1] / "scripts" / "converters" / "cvefixes.py"
+)
 
 
 @pytest.fixture(scope="module")

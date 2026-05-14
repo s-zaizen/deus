@@ -47,8 +47,8 @@
 		class={[
 			'w-full flex items-center gap-1.5 px-2 py-0.5 rounded text-left transition-colors group',
 			isSelected
-				? 'bg-indigo-900/50 text-gray-100'
-				: 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/60'
+				? 'bg-violet-950/45 text-[var(--mk-text)] shadow-[inset_2px_0_0_rgba(185,130,82,0.9)]'
+				: 'text-gray-400 hover:text-[var(--mk-text)] hover:bg-[var(--mk-bg-hover)]'
 		].join(' ')}
 		style="padding-left:{indent};"
 	>
@@ -70,7 +70,7 @@
 	<div>
 		<button
 			onclick={() => (open = !open)}
-			class="w-full flex items-center gap-1.5 px-2 py-0.5 rounded text-left hover:bg-gray-800/40 transition-colors text-gray-500 hover:text-gray-300"
+			class="w-full flex items-center gap-1.5 px-2 py-0.5 rounded text-left hover:bg-[var(--mk-bg-hover)] transition-colors text-gray-500 hover:text-[var(--mk-text-soft)]"
 			style="padding-left:{indent};"
 		>
 			<svg

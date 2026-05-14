@@ -38,7 +38,7 @@ CMD ["serve", "--host", "0.0.0.0", "--port", "7373"]
 FROM node:20-slim AS frontend-deps
 
 WORKDIR /app
-COPY frontend/package.json frontend/package-lock.json ./
+COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./
 RUN npm ci
 
 FROM node:20-slim AS frontend-builder
@@ -60,7 +60,8 @@ ENV NODE_ENV=production
 # adapter-static emits a plain HTML/JS bundle in `build/`, so we serve it
 # with `serve -s` (SPA fallback to index.html). The runtime image stays
 # tiny — just `serve` and the static assets.
-RUN npm install -g serve@14
+COPY frontend/.npmrc ./
+RUN npm install -g serve@14 && rm -f .npmrc
 COPY --from=frontend-builder /app/build ./build
 
 EXPOSE 3000
