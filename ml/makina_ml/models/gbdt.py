@@ -16,7 +16,6 @@ except ImportError:
     sys.exit(1)
 
 
-
 REPLAY_RATIO = 0.30  # 30% reservoir sample from original training data
 
 
@@ -42,7 +41,10 @@ def load_labeled_findings(db_path: str) -> tuple[np.ndarray, np.ndarray]:
 
 def train(db_path: str, output_path: str) -> None:
     X, y = load_labeled_findings(db_path)
-    print(f"Training GBDT on {len(X)} samples ({y.sum()} TP, {len(y)-y.sum()} FP)", file=sys.stderr)
+    print(
+        f"Training GBDT on {len(X)} samples ({y.sum()} TP, {len(y) - y.sum()} FP)",
+        file=sys.stderr,
+    )
 
     model = xgb.XGBClassifier(
         n_estimators=100,
@@ -68,13 +70,21 @@ def predict(model_path: str, features_json: str) -> None:
 
     X = np.array(data["features"], dtype=np.float32).reshape(1, -1)
     prob = model.predict_proba(X)[0][1]
-    print(json.dumps({"confidence": float(prob), "label": "tp" if prob >= 0.5 else "fp"}))
+    print(
+        json.dumps({"confidence": float(prob), "label": "tp" if prob >= 0.5 else "fp"})
+    )
 
 
 def main():
     if len(sys.argv) < 4:
-        print("Usage: python -m makina_ml.models.gbdt train <db> <output>", file=sys.stderr)
-        print("       python -m makina_ml.models.gbdt predict <model> <features.json>", file=sys.stderr)
+        print(
+            "Usage: python -m makina_ml.models.gbdt train <db> <output>",
+            file=sys.stderr,
+        )
+        print(
+            "       python -m makina_ml.models.gbdt predict <model> <features.json>",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     cmd = sys.argv[1]

@@ -23,14 +23,14 @@ def extract_ast_features(code: str, language: str) -> np.ndarray:
     features = []
 
     # Structural features
-    features.append(len(lines))                          # total lines
-    features.append(len(tokens))                         # total tokens
-    features.append(len(code))                           # char count
-    features.append(code.count("def "))                  # function definitions (Python)
-    features.append(code.count("fn "))                   # function definitions (Rust)
-    features.append(code.count("class "))                # class definitions
-    features.append(code.count("import "))               # imports
-    features.append(code.count("use "))                  # Rust use statements
+    features.append(len(lines))  # total lines
+    features.append(len(tokens))  # total tokens
+    features.append(len(code))  # char count
+    features.append(code.count("def "))  # function definitions (Python)
+    features.append(code.count("fn "))  # function definitions (Rust)
+    features.append(code.count("class "))  # class definitions
+    features.append(code.count("import "))  # imports
+    features.append(code.count("use "))  # Rust use statements
 
     # Python danger signals
     features.append(int("pickle" in code))
@@ -53,13 +53,13 @@ def extract_ast_features(code: str, language: str) -> np.ndarray:
     features.append(int(".expect(" in code))
     features.append(int("Command::new" in code))
     features.append(int("sqlx::query(" in code))
-    features.append(code.count(".unwrap()"))             # count of unwraps
-    features.append(code.count(".expect("))              # count of expects
+    features.append(code.count(".unwrap()"))  # count of unwraps
+    features.append(code.count(".expect("))  # count of expects
 
     # String interpolation / formatting indicators
     features.append(int('f"' in code or "f'" in code))
-    features.append(code.count("{"))                     # brace count (f-string/format)
-    features.append(int("% " in code))                  # percent formatting
+    features.append(code.count("{"))  # brace count (f-string/format)
+    features.append(int("% " in code))  # percent formatting
     features.append(int(".format(" in code))
 
     # Complexity proxies
@@ -67,9 +67,12 @@ def extract_ast_features(code: str, language: str) -> np.ndarray:
     features.append(code.count("for "))
     features.append(code.count("while "))
     features.append(code.count("try:"))
-    features.append(code.count("match "))               # Rust match
+    features.append(code.count("match "))  # Rust match
     features.append(max(len(line) for line in lines) if lines else 0)  # max line length
-    features.append(sum(1 for t in tokens if t.startswith('"') or t.startswith("'")) / max(len(tokens), 1))
+    features.append(
+        sum(1 for t in tokens if t.startswith('"') or t.startswith("'"))
+        / max(len(tokens), 1)
+    )
 
     # Padding to fixed length of 50
     while len(features) < 50:
