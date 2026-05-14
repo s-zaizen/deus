@@ -1,216 +1,504 @@
 <script lang="ts">
-	import type { TraceGraph, TraceGraphEdge, TraceGraphNode } from '$lib/types';
+	import { severityTone } from '$lib/theme';
+	import type { Severity, TraceGraph, TraceGraphEdge, TraceGraphNode } from '$lib/types';
 
-	const NODE_WIDTH = 240;
+	const NODE_WIDTH = 292;
 	const NODE_HEIGHT = 94;
-	const X_GAP = 156;
-	const Y_GAP = 48;
-	const PADDING_X = 48;
-	const PADDING_Y = 44;
+	const FINDING_HEIGHT = 112;
+	const X_GAP = 104;
+	const LAYER_COLUMN_GAP = 28;
+	const Y_GAP = 24;
+	const MAX_LAYER_ROWS = 8;
+	const COMPONENT_PAD = 34;
+	const COMPONENT_GAP = 64;
+	const CANVAS_PAD = 42;
+	const TARGET_ROW_WIDTH = 2300;
+	const MIN_ZOOM = 0.3;
+	const MAX_ZOOM = 2;
 
-	type PositionedNode = TraceGraphNode & {
+	type RouteNode = TraceGraphNode & {
+		order: number;
+	};
+
+	type PositionedNode = RouteNode & {
 		x: number;
 		y: number;
 		width: number;
 		height: number;
 		rank: number;
-		order: number;
+		componentId: string;
 	};
 
 	type PositionedEdge = TraceGraphEdge & {
 		path: string;
 		labelX: number;
 		labelY: number;
-		sourceNode: PositionedNode;
-		targetNode: PositionedNode;
+	};
+
+	type ComponentBox = {
+		id: string;
+		x: number;
+		y: number;
+		width: number;
+		height: number;
+		label: string;
+		nodeCount: number;
+		findingCount: number;
 	};
 
 	let {
 		graph,
 		variant = 'compact',
-		onselectnode
+		focusedFindingId = null,
+		resetSignal = 0,
+		onselectnode,
+		onlocatenode,
+		onauditnode
 	}: {
 		graph: TraceGraph;
 		variant?: 'compact' | 'workspace';
+		focusedFindingId?: string | null;
+		resetSignal?: number;
 		onselectnode?: (node: TraceGraphNode) => void;
+		onlocatenode?: (node: TraceGraphNode) => void;
+		onauditnode?: (node: TraceGraphNode) => void;
 	} = $props();
+
+	let selectedNodeId = $state<string | null>(null);
+	let hoveredNodeId = $state<string | null>(null);
+	let viewportEl = $state<HTMLDivElement | null>(null);
+	let zoom = $state(1);
+	let pan = $state({ x: 0, y: 0 });
+	let isPanning = $state(false);
+	let lastPointer = $state({ x: 0, y: 0 });
+	let lastFitSignature = '';
+	let lastResetSignal = 0;
 
 	const nodeMap = $derived.by(() => {
 		const map = new Map<string, TraceGraphNode>();
-		for (const node of graph.nodes) {
-			map.set(node.id, node);
-		}
+		for (const node of graph.nodes) map.set(node.id, node);
 		return map;
 	});
 
-	const adjacency = $derived.by(() => {
+	const outgoingEdges = $derived.by(() => {
+		const map = new Map<string, TraceGraphEdge[]>();
+		for (const node of graph.nodes) map.set(node.id, []);
+		for (const edge of graph.edges) map.get(edge.source)?.push(edge);
+		return map;
+	});
+
+	const incomingEdges = $derived.by(() => {
+		const map = new Map<string, TraceGraphEdge[]>();
+		for (const node of graph.nodes) map.set(node.id, []);
+		for (const edge of graph.edges) map.get(edge.target)?.push(edge);
+		return map;
+	});
+
+	const undirected = $derived.by(() => {
 		const map = new Map<string, string[]>();
-		for (const n of graph.nodes) map.set(n.id, []);
-		for (const e of graph.edges) {
-			const list = map.get(e.source);
-			if (list) list.push(e.target);
+		for (const node of graph.nodes) map.set(node.id, []);
+		for (const edge of graph.edges) {
+			map.get(edge.source)?.push(edge.target);
+			map.get(edge.target)?.push(edge.source);
 		}
 		return map;
 	});
 
-	const inDegree = $derived.by(() => {
-		const deg = new Map<string, number>();
-		for (const n of graph.nodes) deg.set(n.id, 0);
-		for (const e of graph.edges) {
-			deg.set(e.target, (deg.get(e.target) ?? 0) + 1);
+	const nodes = $derived.by(() => orderNodes(graph.nodes));
+	const edgeCount = $derived(graph.edges.length);
+	const layout = $derived.by(() => buildLayout(nodes));
+	const selectedNode = $derived(layout.nodes.find((node) => node.id === selectedNodeId) ?? null);
+	const activeNodeId = $derived(hoveredNodeId ?? selectedNodeId);
+	const highlighted = $derived.by(() => collectHighlight(activeNodeId));
+	const relatedFindingNodes = $derived.by(() => relatedFindings(selectedNode));
+	const layoutSignature = $derived(`${layout.width}:${layout.height}:${layout.nodes.length}:${layout.edges.length}`);
+	const transformStyle = $derived(
+		`width:${layout.width}px;height:${layout.height}px;transform:translate(${pan.x}px, ${pan.y}px) scale(${zoom});transform-origin:0 0;`
+	);
+
+	$effect(() => {
+		if (focusedFindingId) {
+			const focusedNode = layout.nodes.find((node) => node.meta?.findingId === focusedFindingId);
+			if (focusedNode) selectedNodeId = focusedNode.id;
 		}
-		return deg;
 	});
 
-	const nodes = $derived.by(() => {
+	$effect(() => {
+		if (selectedNodeId && layout.nodes.some((node) => node.id === selectedNodeId)) return;
+		selectedNodeId = null;
+	});
+
+	$effect(() => {
+		if (variant !== 'workspace' || !viewportEl || layout.nodes.length === 0) return;
+		if (lastFitSignature === layoutSignature) return;
+		lastFitSignature = layoutSignature;
+		requestAnimationFrame(() => fitToView());
+	});
+
+	$effect(() => {
+		if (resetSignal === lastResetSignal) return;
+		lastResetSignal = resetSignal;
+		selectedNodeId = null;
+		hoveredNodeId = null;
+		if (variant === 'workspace') requestAnimationFrame(() => fitToView());
+	});
+
+	function orderNodes(input: TraceGraphNode[]) {
 		const visited = new Set<string>();
-		const result: TraceGraphNode[] = [];
+		const ordered: TraceGraphNode[] = [];
+		const starts = input
+			.filter((node) => (incomingEdges.get(node.id)?.length ?? 0) === 0)
+			.sort(compareNodes);
 
-		const starts = Array.from(inDegree.entries())
-			.filter(([_, d]) => d === 0)
-			.map(([id]) => id)
-			.sort((a, b) => {
-				const ka = nodeMap.get(a)?.kind ?? '';
-				const kb = nodeMap.get(b)?.kind ?? '';
-				if (ka === 'source' && kb !== 'source') return -1;
-				if (kb === 'source' && ka !== 'source') return 1;
-				return 0;
-			});
-
-		function dfs(id: string) {
+		function visit(id: string) {
 			if (visited.has(id)) return;
 			visited.add(id);
 			const node = nodeMap.get(id);
-			if (node) result.push(node);
-			for (const next of adjacency.get(id) ?? []) {
-				dfs(next);
+			if (node) ordered.push(node);
+			for (const edge of outgoingEdges.get(id) ?? []) visit(edge.target);
+		}
+
+		for (const start of starts.length > 0 ? starts : input.slice(0, 1)) visit(start.id);
+		for (const node of input) {
+			if (!visited.has(node.id)) ordered.push(node);
+		}
+
+		return ordered.map((node, order): RouteNode => ({ ...node, order }));
+	}
+
+	function buildLayout(input: RouteNode[]) {
+		const components = findComponents(input).sort(compareComponents);
+		const positionedNodes: PositionedNode[] = [];
+		const boxes: ComponentBox[] = [];
+		let cursorX = CANVAS_PAD;
+		let cursorY = CANVAS_PAD;
+		let rowHeight = 0;
+		let maxWidth = 0;
+
+		components.forEach((component, componentIndex) => {
+			const componentLayout = layoutComponent(component, `component-${componentIndex + 1}`);
+			if (cursorX > CANVAS_PAD && cursorX + componentLayout.width > TARGET_ROW_WIDTH) {
+				cursorX = CANVAS_PAD;
+				cursorY += rowHeight + COMPONENT_GAP;
+				rowHeight = 0;
 			}
-		}
 
-		for (const s of starts) dfs(s);
-
-		for (const n of graph.nodes) {
-			if (!visited.has(n.id)) result.push(n);
-		}
-
-		return result;
-	});
-
-	const edgeCount = $derived(graph.edges.length);
-
-	const edgeSet = $derived.by(() => {
-		const set = new Set<string>();
-		for (const e of graph.edges) {
-			set.add(edgeKey(e.source, e.target));
-		}
-		return set;
-	});
-
-	const layout = $derived.by(() => {
-		const ranks = new Map<string, number>();
-		const starts = nodes.filter((node) => (inDegree.get(node.id) ?? 0) === 0);
-		const queue: string[] = [];
-
-		for (const start of starts.length > 0 ? starts : nodes.slice(0, 1)) {
-			ranks.set(start.id, 0);
-			queue.push(start.id);
-		}
-
-		let guard = 0;
-		while (queue.length > 0 && guard < graph.nodes.length * Math.max(graph.edges.length, 1) + 1) {
-			guard += 1;
-			const current = queue.shift();
-			if (!current) continue;
-			const nextRank = (ranks.get(current) ?? 0) + 1;
-			for (const target of adjacency.get(current) ?? []) {
-				if ((ranks.get(target) ?? -1) >= nextRank) continue;
-				ranks.set(target, nextRank);
-				queue.push(target);
+			for (const node of componentLayout.nodes) {
+				positionedNodes.push({
+					...node,
+					x: node.x + cursorX,
+					y: node.y + cursorY
+				});
 			}
-		}
 
-		for (const node of nodes) {
-			if (!ranks.has(node.id)) ranks.set(node.id, ranks.size === 0 ? 0 : Math.max(...ranks.values()) + 1);
-		}
+			boxes.push({
+				id: componentLayout.id,
+				x: cursorX,
+				y: cursorY,
+				width: componentLayout.width,
+				height: componentLayout.height,
+				label: componentLayout.label,
+				nodeCount: component.length,
+				findingCount: component.filter((node) => node.kind === 'finding').length
+			});
 
-		const layers = new Map<number, TraceGraphNode[]>();
-		for (const node of nodes) {
+			maxWidth = Math.max(maxWidth, cursorX + componentLayout.width + CANVAS_PAD);
+			rowHeight = Math.max(rowHeight, componentLayout.height);
+			cursorX += componentLayout.width + COMPONENT_GAP;
+		});
+
+		const positionedById = new Map(positionedNodes.map((node) => [node.id, node]));
+		const positionedEdges = graph.edges.flatMap((edge): PositionedEdge[] => {
+			const source = positionedById.get(edge.source);
+			const target = positionedById.get(edge.target);
+			if (!source || !target) return [];
+			const forward = target.x >= source.x;
+			const sx = forward ? source.x + source.width : source.x;
+			const tx = forward ? target.x : target.x + target.width;
+			const sy = source.y + source.height / 2;
+			const ty = target.y + target.height / 2;
+			const curve = Math.max(54, Math.abs(tx - sx) * 0.42);
+			const direction = forward ? 1 : -1;
+			return [
+				{
+					...edge,
+					path: `M ${sx} ${sy} C ${sx + curve * direction} ${sy}, ${tx - curve * direction} ${ty}, ${tx} ${ty}`,
+					labelX: (sx + tx) / 2,
+					labelY: (sy + ty) / 2 - 8
+				}
+			];
+		});
+
+		return {
+			nodes: positionedNodes,
+			edges: positionedEdges,
+			boxes,
+			width: Math.max(980, maxWidth),
+			height: Math.max(620, cursorY + rowHeight + CANVAS_PAD)
+		};
+	}
+
+	function findComponents(input: RouteNode[]) {
+		const visited = new Set<string>();
+		const components: RouteNode[][] = [];
+		for (const node of input) {
+			if (visited.has(node.id)) continue;
+			const stack = [node.id];
+			const component: RouteNode[] = [];
+			visited.add(node.id);
+			while (stack.length > 0) {
+				const id = stack.pop();
+				if (!id) continue;
+				const item = input.find((candidate) => candidate.id === id);
+				if (item) component.push(item);
+				for (const next of undirected.get(id) ?? []) {
+					if (visited.has(next)) continue;
+					visited.add(next);
+					stack.push(next);
+				}
+			}
+			components.push(component.sort(compareNodes));
+		}
+		return components;
+	}
+
+	function layoutComponent(component: RouteNode[], componentId: string) {
+		const componentIds = new Set(component.map((node) => node.id));
+		const ranks = computeRanks(component, componentIds);
+		const layers = new Map<number, RouteNode[]>();
+		for (const node of component) {
 			const rank = ranks.get(node.id) ?? 0;
 			const layer = layers.get(rank) ?? [];
 			layer.push(node);
 			layers.set(rank, layer);
 		}
+		for (const layer of layers.values()) layer.sort(compareNodes);
 
-		for (const layer of layers.values()) {
-			layer.sort((a, b) => {
-				const kindDelta = kindOrder(a.kind) - kindOrder(b.kind);
-				if (kindDelta !== 0) return kindDelta;
-				return (a.line_start ?? 0) - (b.line_start ?? 0);
-			});
-		}
+		const positioned: PositionedNode[] = [];
+		let componentHeight = COMPONENT_PAD * 2;
+		let componentWidth = COMPONENT_PAD * 2;
+		let rankX = COMPONENT_PAD;
 
-		const positionedNodes: PositionedNode[] = [];
 		for (const [rank, layer] of Array.from(layers.entries()).sort(([a], [b]) => a - b)) {
-			layer.forEach((node, order) => {
-				positionedNodes.push({
+			const rowCount = Math.min(MAX_LAYER_ROWS, Math.max(1, layer.length));
+			const columnCount = Math.ceil(layer.length / MAX_LAYER_ROWS);
+			const rowHeights = Array.from({ length: rowCount }, (_, row) =>
+				Math.max(
+					...layer
+						.filter((_, index) => index % MAX_LAYER_ROWS === row)
+						.map((node) => (node.kind === 'finding' ? FINDING_HEIGHT : NODE_HEIGHT)),
+					NODE_HEIGHT
+				)
+			);
+			const rowOffsets: number[] = [];
+			let y = COMPONENT_PAD;
+			for (const height of rowHeights) {
+				rowOffsets.push(y);
+				y += height + Y_GAP;
+			}
+
+			layer.forEach((node, index) => {
+				const column = Math.floor(index / MAX_LAYER_ROWS);
+				const row = index % MAX_LAYER_ROWS;
+				const height = node.kind === 'finding' ? FINDING_HEIGHT : NODE_HEIGHT;
+				positioned.push({
 					...node,
-					x: PADDING_X + rank * (NODE_WIDTH + X_GAP),
-					y: PADDING_Y + order * (NODE_HEIGHT + Y_GAP),
+					x: rankX + column * (NODE_WIDTH + LAYER_COLUMN_GAP),
+					y: rowOffsets[row],
 					width: NODE_WIDTH,
-					height: NODE_HEIGHT,
+					height,
 					rank,
-					order
+					componentId
 				});
 			});
+
+			const layerWidth = columnCount * NODE_WIDTH + Math.max(0, columnCount - 1) * LAYER_COLUMN_GAP;
+			const layerHeight = rowOffsets[rowOffsets.length - 1] + rowHeights[rowHeights.length - 1] + COMPONENT_PAD;
+			componentHeight = Math.max(componentHeight, layerHeight);
+			componentWidth = Math.max(componentWidth, rankX + layerWidth + COMPONENT_PAD);
+			rankX += layerWidth + X_GAP;
 		}
 
-		const positionedById = new Map(positionedNodes.map((node) => [node.id, node]));
-		const positionedEdges: PositionedEdge[] = graph.edges.flatMap((edge) => {
-			const sourceNode = positionedById.get(edge.source);
-			const targetNode = positionedById.get(edge.target);
-			if (!sourceNode || !targetNode) return [];
-			const sx = sourceNode.x + sourceNode.width;
-			const sy = sourceNode.y + sourceNode.height / 2;
-			const tx = targetNode.x;
-			const ty = targetNode.y + targetNode.height / 2;
-			const curve = Math.max(80, Math.abs(tx - sx) * 0.48);
-			return [{
-				...edge,
-				sourceNode,
-				targetNode,
-				path: `M ${sx} ${sy} C ${sx + curve} ${sy}, ${tx - curve} ${ty}, ${tx} ${ty}`,
-				labelX: (sx + tx) / 2,
-				labelY: (sy + ty) / 2 - 10
-			}];
-		});
-
-		const maxRank = Math.max(0, ...Array.from(layers.keys()));
-		const maxLayerSize = Math.max(1, ...Array.from(layers.values()).map((layer) => layer.length));
 		return {
-			nodes: positionedNodes,
-			edges: positionedEdges,
-			width: Math.max(900, PADDING_X * 2 + (maxRank + 1) * NODE_WIDTH + maxRank * X_GAP),
-			height: Math.max(520, PADDING_Y * 2 + maxLayerSize * NODE_HEIGHT + (maxLayerSize - 1) * Y_GAP)
+			id: componentId,
+			label: componentLabel(component),
+			nodes: positioned,
+			width: componentWidth,
+			height: componentHeight
 		};
-	});
-
-	let selectedNodeId = $state<string | null>(null);
-
-	const selectedNode = $derived(graph.nodes.find((n) => n.id === selectedNodeId) ?? null);
-
-	$effect(() => {
-		if (variant !== 'workspace') return;
-		if (selectedNodeId && graph.nodes.some((n) => n.id === selectedNodeId)) return;
-		selectedNodeId = graph.nodes[0]?.id ?? null;
-	});
-
-	function edgeKey(source: string, target: string) {
-		return `${source}->${target}`;
 	}
 
-	function handleNodeClick(node: TraceGraphNode) {
+	function computeRanks(component: RouteNode[], componentIds: Set<string>) {
+		const ranks = new Map<string, number>();
+		const localIncomingCount = new Map<string, number>();
+		for (const node of component) localIncomingCount.set(node.id, 0);
+		for (const edge of graph.edges) {
+			if (componentIds.has(edge.source) && componentIds.has(edge.target)) {
+				localIncomingCount.set(edge.target, (localIncomingCount.get(edge.target) ?? 0) + 1);
+			}
+		}
+
+		const starts = component
+			.filter((node) => (localIncomingCount.get(node.id) ?? 0) === 0)
+			.sort(compareNodes);
+		const queue: string[] = [];
+		for (const start of starts.length > 0 ? starts : component.slice(0, 1)) {
+			ranks.set(start.id, 0);
+			queue.push(start.id);
+		}
+
+		let guard = 0;
+		while (queue.length > 0 && guard < component.length * Math.max(graph.edges.length, 1) + 1) {
+			guard += 1;
+			const current = queue.shift();
+			if (!current) continue;
+			const nextRank = (ranks.get(current) ?? 0) + 1;
+			for (const edge of outgoingEdges.get(current) ?? []) {
+				if (!componentIds.has(edge.target)) continue;
+				if ((ranks.get(edge.target) ?? -1) >= nextRank) continue;
+				ranks.set(edge.target, nextRank);
+				queue.push(edge.target);
+			}
+		}
+
+		let fallbackRank = Math.max(0, ...Array.from(ranks.values()));
+		for (const node of component) {
+			if (ranks.has(node.id)) continue;
+			fallbackRank += 1;
+			ranks.set(node.id, fallbackRank);
+		}
+		return ranks;
+	}
+
+	function collectHighlight(id: string | null) {
+		const nodeIds = new Set<string>();
+		const edgeIds = new Set<string>();
+		if (!id) return { nodeIds, edgeIds };
+
+		function walk(current: string, direction: 'up' | 'down') {
+			if (nodeIds.has(`${direction}:${current}`)) return;
+			nodeIds.add(`${direction}:${current}`);
+			const edges = direction === 'down' ? outgoingEdges.get(current) : incomingEdges.get(current);
+			for (const edge of edges ?? []) {
+				edgeIds.add(edge.id);
+				const next = direction === 'down' ? edge.target : edge.source;
+				walk(next, direction);
+			}
+		}
+
+		walk(id, 'up');
+		walk(id, 'down');
+		return {
+			nodeIds: new Set(Array.from(nodeIds).map((value) => value.split(':').slice(1).join(':'))),
+			edgeIds
+		};
+	}
+
+	function relatedFindings(node: PositionedNode | null) {
+		if (!node) return [];
+		const ids = new Set(node.meta?.relatedFindingIds ?? []);
+		if (node.meta?.findingId) ids.add(node.meta.findingId);
+		return layout.nodes
+			.filter((candidate) => candidate.kind === 'finding' && candidate.meta?.findingId && ids.has(candidate.meta.findingId))
+			.sort(compareNodes);
+	}
+
+	function selectNode(node: TraceGraphNode) {
 		selectedNodeId = node.id;
 		onselectnode?.(node);
+	}
+
+	function focusFinding(node: TraceGraphNode) {
+		selectedNodeId = node.id;
+		onselectnode?.(node);
+		if (node.meta?.findingId) onlocatenode?.(node);
+	}
+
+	function locateNode(node: TraceGraphNode) {
+		onlocatenode?.(node);
+	}
+
+	function auditNode(node: TraceGraphNode) {
+		onauditnode?.(node);
+	}
+
+	function fitToView() {
+		if (!viewportEl || layout.width <= 0 || layout.height <= 0) return;
+		const width = viewportEl.clientWidth;
+		const height = viewportEl.clientHeight;
+		if (width <= 0 || height <= 0) return;
+		const nextZoom = clamp(Math.min((width - 72) / layout.width, (height - 72) / layout.height), MIN_ZOOM, 1.1);
+		zoom = nextZoom;
+		pan = {
+			x: Math.max(24, (width - layout.width * nextZoom) / 2),
+			y: Math.max(24, (height - layout.height * nextZoom) / 2)
+		};
+	}
+
+	function zoomBy(delta: number) {
+		if (!viewportEl) return;
+		const rect = viewportEl.getBoundingClientRect();
+		const centerX = rect.width / 2;
+		const centerY = rect.height / 2;
+		const nextZoom = clamp(zoom + delta, MIN_ZOOM, MAX_ZOOM);
+		const graphX = (centerX - pan.x) / zoom;
+		const graphY = (centerY - pan.y) / zoom;
+		zoom = nextZoom;
+		pan = {
+			x: centerX - graphX * nextZoom,
+			y: centerY - graphY * nextZoom
+		};
+	}
+
+	function handleWheel(event: WheelEvent) {
+		if (!viewportEl) return;
+		event.preventDefault();
+		const rect = viewportEl.getBoundingClientRect();
+		const mouseX = event.clientX - rect.left;
+		const mouseY = event.clientY - rect.top;
+		const nextZoom = clamp(zoom * (event.deltaY > 0 ? 0.9 : 1.1), MIN_ZOOM, MAX_ZOOM);
+		const graphX = (mouseX - pan.x) / zoom;
+		const graphY = (mouseY - pan.y) / zoom;
+		zoom = nextZoom;
+		pan = {
+			x: mouseX - graphX * nextZoom,
+			y: mouseY - graphY * nextZoom
+		};
+	}
+
+	function handlePointerDown(event: PointerEvent) {
+		const target = event.target as HTMLElement;
+		if (target.closest('[data-trace-node], [data-trace-control]')) return;
+		isPanning = true;
+		lastPointer = { x: event.clientX, y: event.clientY };
+		(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+	}
+
+	function handlePointerMove(event: PointerEvent) {
+		if (!isPanning) return;
+		const dx = event.clientX - lastPointer.x;
+		const dy = event.clientY - lastPointer.y;
+		lastPointer = { x: event.clientX, y: event.clientY };
+		pan = { x: pan.x + dx, y: pan.y + dy };
+	}
+
+	function handlePointerUp(event: PointerEvent) {
+		isPanning = false;
+		const target = event.currentTarget as HTMLElement;
+		if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
+	}
+
+	function compareNodes(a: TraceGraphNode, b: TraceGraphNode) {
+		return kindOrder(a.kind) - kindOrder(b.kind)
+			|| severityOrder(a.meta?.severity) - severityOrder(b.meta?.severity)
+			|| (a.line_start ?? 0) - (b.line_start ?? 0)
+			|| a.label.localeCompare(b.label);
+	}
+
+	function compareComponents(a: RouteNode[], b: RouteNode[]) {
+		return componentSeverity(a) - componentSeverity(b)
+			|| b.filter((node) => node.kind === 'finding').length - a.filter((node) => node.kind === 'finding').length
+			|| b.length - a.length;
 	}
 
 	function kindOrder(kind: string) {
@@ -228,138 +516,176 @@
 		}
 	}
 
-	function kindClasses(kind: string) {
-		switch (kind) {
-			case 'source':
-				return 'border-teal-800/60 bg-teal-950/30 text-teal-300';
-			case 'function':
-				return 'border-blue-800/60 bg-blue-950/30 text-blue-300';
-			case 'sink':
-				return 'border-red-800/60 bg-red-950/30 text-red-300';
-			case 'finding':
-				return 'border-violet-800/60 bg-violet-950/30 text-violet-300';
+	function severityOrder(severity: Severity | null | undefined) {
+		switch (severity) {
+			case 'critical':
+				return 0;
+			case 'high':
+				return 1;
+			case 'medium':
+				return 2;
+			case 'low':
+				return 3;
 			default:
-				return 'border-gray-700/60 bg-gray-900/40 text-gray-300';
+				return 4;
+		}
+	}
+
+	function componentSeverity(component: RouteNode[]) {
+		return Math.min(...component.map((node) => severityOrder(node.meta?.severity ?? node.meta?.severities?.[0])));
+	}
+
+	function componentLabel(component: RouteNode[]) {
+		const findingCount = component.filter((node) => node.kind === 'finding').length;
+		const source = component.find((node) => node.kind === 'source')?.label;
+		return `${findingCount || 1} trace${findingCount === 1 ? '' : 's'}${source ? ` / ${source}` : ''}`;
+	}
+
+	function nodeSubtitle(node: TraceGraphNode) {
+		const parts: string[] = [];
+		if (node.file) parts.push(node.file);
+		if (node.line_start != null) {
+			parts.push(node.line_end != null && node.line_end > node.line_start ? `L${node.line_start}-${node.line_end}` : `L${node.line_start}`);
+		}
+		return parts.join(' / ');
+	}
+
+	function nodeDimmed(id: string) {
+		return Boolean(activeNodeId && !highlighted.nodeIds.has(id));
+	}
+
+	function edgeDimmed(id: string) {
+		return Boolean(activeNodeId && !highlighted.edgeIds.has(id));
+	}
+
+	function nodeClasses(node: TraceGraphNode, active: boolean) {
+		const base = active
+			? 'ring-2 ring-[var(--mk-brand)] border-[var(--mk-brand-strong)]'
+			: 'hover:border-[var(--mk-border-strong)] hover:bg-[var(--mk-bg-hover)]';
+		if (node.kind === 'finding' && node.meta?.severity) {
+			return `${base} ${severityBorder(node.meta.severity)} bg-[var(--mk-bg-elevated)]`;
+		}
+		switch (node.kind) {
+			case 'source':
+				return `${base} border-teal-700/60 bg-teal-950/20`;
+			case 'function':
+				return `${base} border-blue-700/60 bg-blue-950/20`;
+			case 'sink':
+				return `${base} border-red-700/65 bg-red-950/20`;
+			case 'finding':
+				return `${base} border-violet-700/60 bg-violet-950/20`;
+			default:
+				return `${base} border-[var(--mk-border)] bg-[var(--mk-bg-elevated)]`;
 		}
 	}
 
 	function kindBadgeClasses(kind: string) {
 		switch (kind) {
 			case 'source':
-				return 'bg-teal-900/60 text-teal-300 border-teal-800/60';
+				return 'border-teal-700/70 bg-teal-950/40 text-teal-300';
 			case 'function':
-				return 'bg-blue-900/60 text-blue-300 border-blue-800/60';
+				return 'border-blue-700/70 bg-blue-950/40 text-blue-300';
 			case 'sink':
-				return 'bg-red-900/60 text-red-300 border-red-800/60';
+				return 'border-red-700/70 bg-red-950/40 text-red-300';
 			case 'finding':
-				return 'bg-violet-900/60 text-violet-300 border-violet-800/60';
+				return 'border-violet-700/70 bg-violet-950/40 text-violet-300';
 			default:
-				return 'bg-gray-800 text-gray-300 border-gray-700';
+				return 'border-[var(--mk-border)] bg-[var(--mk-bg-panel)] text-[var(--mk-text-muted)]';
 		}
 	}
 
-	function edgeClasses(kind: string) {
-		switch (kind) {
-			case 'reports':
-				return 'stroke-violet-400/75';
-			case 'flows_to':
-				return 'stroke-cyan-300/65';
-			default:
-				return 'stroke-gray-500/55';
+	function severityBorder(severity: Severity) {
+		switch (severity) {
+			case 'critical':
+				return 'border-red-600/90';
+			case 'high':
+				return 'border-orange-600/90';
+			case 'medium':
+				return 'border-amber-600/90';
+			case 'low':
+				return 'border-sky-600/90';
 		}
 	}
 
-	function nodeSubtitle(n: TraceGraphNode) {
-		const parts: string[] = [];
-		if (n.file) parts.push(n.file);
-		if (n.line_start != null) {
-			if (n.line_end != null && n.line_end > n.line_start) {
-				parts.push(`L${n.line_start}-${n.line_end}`);
-			} else {
-				parts.push(`L${n.line_start}`);
-			}
-		}
-		return parts.join(' / ');
+	function severityBadgeClasses(severity: Severity | null | undefined) {
+		return severity ? severityTone(severity).badge : 'border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] text-[var(--mk-text-muted)]';
+	}
+
+	function edgeClasses(edge: PositionedEdge) {
+		const dimmed = edgeDimmed(edge.id);
+		if (edge.kind === 'reports') return dimmed ? 'stroke-violet-900/25' : 'stroke-violet-400/80';
+		return dimmed ? 'stroke-cyan-900/25' : 'stroke-cyan-300/70';
+	}
+
+	function clamp(value: number, min: number, max: number) {
+		return Math.min(max, Math.max(min, value));
 	}
 </script>
 
 {#if variant === 'compact'}
-	<div class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-panel)] overflow-hidden">
-		<!-- Header -->
-		<div class="flex items-center justify-between px-3 py-1.5 border-b border-[var(--mk-border)] bg-[var(--mk-bg-elevated)]">
-			<span class="text-[11px] font-semibold text-[var(--mk-text-soft)] tracking-wide">Trace Graph</span>
-			<span class="text-[10px] text-[var(--mk-text-muted)] tabular-nums">{nodes.length} nodes / {edgeCount} edges</span>
+	<div class="overflow-hidden rounded border border-[var(--mk-border)] bg-[var(--mk-bg-panel)]">
+		<div class="flex items-center justify-between border-b border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-3 py-1.5">
+			<span class="text-[11px] font-semibold tracking-wide text-[var(--mk-text-soft)]">Trace Graph</span>
+			<span class="font-mono text-[10px] text-[var(--mk-text-muted)]">{nodes.length} nodes / {edgeCount} edges</span>
 		</div>
-
-		<!-- Flow -->
-		<div class="flex items-center gap-1 px-3 py-3 overflow-x-auto">
-			{#each nodes as node, i (node.id)}
-				<div class="flex items-center gap-1 shrink-0">
-					<!-- Node card -->
-					<div
-						class={[
-							'relative flex flex-col gap-0.5 min-w-[8rem] max-w-[14rem] rounded border px-2.5 py-2 transition-colors',
-							kindClasses(node.kind)
-						].join(' ')}
-						title={node.detail ?? node.label}
-					>
-						<span
-							class={[
-								'inline-flex self-start text-[9px] font-bold uppercase tracking-wider px-1 py-0.5 rounded border leading-none',
-								kindBadgeClasses(node.kind)
-							].join(' ')}
-						>
-							{node.kind}
-						</span>
-						<span class="text-[11px] font-medium leading-snug truncate">{node.label}</span>
-						{#if nodeSubtitle(node)}
-							<span class="text-[10px] text-[var(--mk-text-muted)] truncate">{nodeSubtitle(node)}</span>
-						{/if}
-					</div>
-
-					{#if i < nodes.length - 1 && edgeSet.has(edgeKey(node.id, nodes[i + 1].id))}
-						<div class="shrink-0 px-0.5">
-							<svg width="16" height="16" viewBox="0 0 16 16" fill="none" class="text-[var(--mk-text-muted)]">
-								<path d="M3 8H13M13 8L9 4M13 8L9 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-							</svg>
-						</div>
+		<div class="flex items-stretch gap-2 overflow-x-auto px-3 py-3">
+			{#each nodes as node, index (node.id)}
+				<button
+					type="button"
+					class={['min-w-[9rem] max-w-[14rem] shrink-0 rounded border px-2.5 py-2 text-left transition-colors', nodeClasses(node, selectedNodeId === node.id)].join(' ')}
+					title={node.detail ?? node.label}
+					onclick={() => selectNode(node)}
+				>
+					<span class={['mb-1 inline-flex rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider', kindBadgeClasses(node.kind)].join(' ')}>
+						{node.kind}
+					</span>
+					<span class="block truncate text-[11px] font-semibold text-[var(--mk-text)]">{node.label}</span>
+					{#if nodeSubtitle(node)}
+						<span class="mt-0.5 block truncate font-mono text-[10px] text-[var(--mk-text-muted)]">{nodeSubtitle(node)}</span>
 					{/if}
-				</div>
+				</button>
+				{#if index < nodes.length - 1}
+					<div class="flex shrink-0 items-center text-[var(--mk-text-muted)]">
+						<svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+							<path d="M3 9h11m0 0-4-4m4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+						</svg>
+					</div>
+				{/if}
 			{/each}
 		</div>
 	</div>
 {:else}
-	<div class="flex flex-col h-full overflow-hidden">
-		<!-- Header -->
-		<div class="flex items-center justify-between px-4 py-2 border-b border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] shrink-0">
-			<div class="flex items-center gap-3">
-				<span class="text-xs font-semibold text-[var(--mk-text-soft)] tracking-wide">Call Graph</span>
-				<div class="hidden items-center gap-2 text-[10px] text-[var(--mk-text-muted)] md:flex">
-					<span class="inline-flex items-center gap-1">
-						<span class="h-2 w-2 rounded-full bg-teal-400/80"></span>
-						Source
-					</span>
-					<span class="inline-flex items-center gap-1">
-						<span class="h-2 w-2 rounded-full bg-blue-400/80"></span>
-						Function
-					</span>
-					<span class="inline-flex items-center gap-1">
-						<span class="h-2 w-2 rounded-full bg-red-400/80"></span>
-						Sink
-					</span>
-					<span class="inline-flex items-center gap-1">
-						<span class="h-2 w-2 rounded-full bg-violet-400/80"></span>
-						Finding
-					</span>
+	<div class="flex h-full min-h-0 w-full overflow-hidden">
+		<div class="flex min-w-0 flex-1 flex-col bg-[var(--mk-bg)]">
+			<div class="flex h-10 shrink-0 items-center justify-between border-b border-[var(--mk-border)] bg-[var(--mk-bg-panel)] px-3">
+				<div class="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--mk-text-muted)]">
+					<span>{layout.boxes.length} components</span>
+					<span class="text-[var(--mk-border-strong)]">/</span>
+					<span>{layout.nodes.length} nodes</span>
+					<span class="text-[var(--mk-border-strong)]">/</span>
+					<span>{layout.edges.length} edges</span>
+				</div>
+				<div class="flex items-center gap-1" data-trace-control>
+					<button type="button" onclick={() => zoomBy(-0.1)} class="h-7 rounded border border-[var(--mk-border)] px-2 text-xs font-bold text-[var(--mk-text-muted)] hover:border-[var(--mk-border-strong)] hover:text-[var(--mk-text)]">-</button>
+					<span class="min-w-12 rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 py-1 text-center font-mono text-[10px] text-[var(--mk-text-muted)]">{Math.round(zoom * 100)}%</span>
+					<button type="button" onclick={() => zoomBy(0.1)} class="h-7 rounded border border-[var(--mk-border)] px-2 text-xs font-bold text-[var(--mk-text-muted)] hover:border-[var(--mk-border-strong)] hover:text-[var(--mk-text)]">+</button>
+					<button type="button" onclick={fitToView} class="h-7 rounded border border-[var(--mk-border)] px-2 text-xs font-semibold text-[var(--mk-text-muted)] hover:border-[var(--mk-brand)] hover:text-[var(--mk-text)]">Fit</button>
 				</div>
 			</div>
-			<span class="text-[11px] text-[var(--mk-text-muted)] tabular-nums">{nodes.length} nodes / {edgeCount} edges</span>
-		</div>
 
-		<div class="flex flex-1 min-h-0">
-			<!-- Graph canvas -->
-			<div class="flex-1 overflow-auto bg-[var(--mk-bg)] bg-[linear-gradient(rgba(148,163,184,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.035)_1px,transparent_1px)] bg-[size:28px_28px]">
-				<div class="relative" style={`width:${layout.width}px;height:${layout.height}px;`}>
+			<div
+				bind:this={viewportEl}
+				class={['relative min-h-0 flex-1 overflow-hidden bg-[var(--mk-bg)]', isPanning ? 'cursor-grabbing' : 'cursor-grab'].join(' ')}
+				style="background-image: radial-gradient(circle, rgba(216, 199, 170, 0.08) 1px, transparent 1px); background-size: 22px 22px;"
+				role="application"
+				aria-label="Trace graph canvas"
+				onwheel={handleWheel}
+				onpointerdown={handlePointerDown}
+				onpointermove={handlePointerMove}
+				onpointerup={handlePointerUp}
+				onpointercancel={handlePointerUp}
+			>
+				<div class="absolute left-0 top-0" style={transformStyle}>
 					<svg
 						class="absolute inset-0 pointer-events-none"
 						width={layout.width}
@@ -369,115 +695,199 @@
 					>
 						<defs>
 							<marker id="trace-arrow-flow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
-								<path d="M 0 0 L 10 5 L 0 10 z" class="fill-cyan-300/65"></path>
+								<path d="M 0 0 L 10 5 L 0 10 z" class="fill-cyan-300/70"></path>
 							</marker>
 							<marker id="trace-arrow-report" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
-								<path d="M 0 0 L 10 5 L 0 10 z" class="fill-violet-400/75"></path>
+								<path d="M 0 0 L 10 5 L 0 10 z" class="fill-violet-400/80"></path>
 							</marker>
+							<filter id="trace-edge-glow" x="-50%" y="-50%" width="200%" height="200%">
+								<feGaussianBlur stdDeviation="2.4" result="blur" />
+								<feMerge>
+									<feMergeNode in="blur" />
+									<feMergeNode in="SourceGraphic" />
+								</feMerge>
+							</filter>
 						</defs>
+
+						{#each layout.boxes as box (box.id)}
+							<rect
+								x={box.x}
+								y={box.y}
+								width={box.width}
+								height={box.height}
+								rx="10"
+								class="fill-[var(--mk-bg-elevated)] stroke-[var(--mk-border)]"
+								fill-opacity="0.22"
+							/>
+							<text x={box.x + 14} y={box.y + 20} class="fill-[var(--mk-text-muted)] text-[10px] font-bold uppercase tracking-[0.18em]">
+								{box.label}
+							</text>
+						{/each}
 
 						{#each layout.edges as edge (edge.id)}
 							<path
 								d={edge.path}
 								fill="none"
-								class={edgeClasses(edge.kind)}
-								stroke-width="2"
+								class={edgeClasses(edge)}
+								stroke-width={highlighted.edgeIds.has(edge.id) ? 3 : edge.kind === 'reports' ? 2 : 1.5}
 								stroke-linecap="round"
-								marker-end={edge.kind === 'reports' ? 'url(#trace-arrow-report)' : 'url(#trace-arrow-flow)'}
+								filter={highlighted.edgeIds.has(edge.id) ? 'url(#trace-edge-glow)' : undefined}
+								marker-end={edgeDimmed(edge.id) ? undefined : edge.kind === 'reports' ? 'url(#trace-arrow-report)' : 'url(#trace-arrow-flow)'}
 							/>
-							{#if edge.label}
-								<text
-									x={edge.labelX}
-									y={edge.labelY}
-									text-anchor="middle"
-									class="fill-[var(--mk-text-muted)] text-[10px] uppercase tracking-wider"
-								>
-									{edge.label}
-								</text>
-							{/if}
 						{/each}
 					</svg>
 
 					{#each layout.nodes as node (node.id)}
 						<button
 							type="button"
-							onclick={() => handleNodeClick(node)}
-							onkeydown={(e) => e.key === 'Enter' && handleNodeClick(node)}
+							data-trace-node
+							onclick={() => selectNode(node)}
+							onpointerenter={() => (hoveredNodeId = node.id)}
+							onpointerleave={() => (hoveredNodeId = null)}
+							ondblclick={() => locateNode(node)}
 							class={[
-								'absolute flex flex-col gap-1.5 rounded-lg border px-3.5 py-3 text-left transition-all cursor-pointer shadow-[0_12px_30px_rgba(0,0,0,0.22)] backdrop-blur',
-								kindClasses(node.kind),
-								selectedNodeId === node.id
-									? 'ring-2 ring-violet-500/70 shadow-[0_0_24px_rgba(139,92,246,0.2)]'
-									: 'hover:ring-1 hover:ring-violet-500/35 hover:-translate-y-0.5'
+								'absolute flex flex-col gap-1 rounded-md border px-3 py-2 text-left transition-all cursor-pointer shadow-sm backdrop-blur',
+								nodeClasses(node, selectedNodeId === node.id),
+								nodeDimmed(node.id) ? 'opacity-25' : 'opacity-100'
 							].join(' ')}
 							style={`left:${node.x}px;top:${node.y}px;width:${node.width}px;min-height:${node.height}px;`}
 							title={node.detail ?? node.label}
 						>
-							<div class="flex items-start justify-between gap-2">
-								<span
-									class={[
-										'inline-flex text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border leading-none',
-										kindBadgeClasses(node.kind)
-									].join(' ')}
-								>
-									{node.kind}
+							<div class="flex items-center justify-between gap-2">
+								<span class={['rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider', kindBadgeClasses(node.kind)].join(' ')}>
+									{node.kind === 'finding' && node.meta?.ordinal ? `MAKINA-${String(node.meta.ordinal).padStart(3, '0')}` : node.kind}
 								</span>
-								<span class="font-mono text-[10px] text-[var(--mk-text-muted)]">#{node.rank + 1}.{node.order + 1}</span>
+								{#if node.kind === 'finding'}
+									<span class={['rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider', severityBadgeClasses(node.meta?.severity)].join(' ')}>
+										{node.meta?.severity ?? 'finding'}
+									</span>
+								{:else}
+									<span class="font-mono text-[10px] text-[var(--mk-text-muted)]">{node.rank + 1}.{node.order + 1}</span>
+								{/if}
 							</div>
-							<span class="text-xs font-semibold leading-snug text-[var(--mk-text)]">{node.label}</span>
+							{#if node.kind === 'finding' && node.meta?.cwe}
+								<span class="inline-flex w-fit rounded border border-[var(--mk-border)] bg-[var(--mk-bg-panel)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--mk-text-soft)]">{node.meta.cwe}</span>
+							{/if}
+							<span class="max-h-10 overflow-hidden text-xs font-semibold leading-snug text-[var(--mk-text)]">{node.meta?.message ?? node.label}</span>
 							{#if nodeSubtitle(node)}
-								<span class="text-[11px] text-[var(--mk-text-muted)] truncate">{nodeSubtitle(node)}</span>
+								<span class="truncate font-mono text-[10px] text-[var(--mk-text-muted)]">{nodeSubtitle(node)}</span>
 							{/if}
 						</button>
 					{/each}
 				</div>
 			</div>
+		</div>
 
-			<!-- Details sidebar -->
+		<aside class="w-80 shrink-0 border-l border-[var(--mk-border)] bg-[var(--mk-bg-panel)]">
+			<div class="border-b border-[var(--mk-border)] px-3 py-2">
+				<div class="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--mk-text-muted)]">Inspector</div>
+			</div>
 			{#if selectedNode}
-				<div class="w-64 shrink-0 border-l border-[var(--mk-border)] bg-[var(--mk-bg-panel)] flex flex-col overflow-hidden">
-					<div class="px-3 py-2 border-b border-[var(--mk-border)] shrink-0">
-						<span class="text-[10px] font-bold uppercase tracking-wider text-gray-500">Node Details</span>
-					</div>
-					<div class="flex-1 overflow-y-auto p-3 space-y-3">
-						<div>
-							<span class="text-[10px] uppercase tracking-wider text-gray-500 block mb-1">Kind</span>
-							<span
-								class={[
-									'inline-flex text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border leading-none',
-									kindBadgeClasses(selectedNode.kind)
-								].join(' ')}
-							>
+				<div class="space-y-4 p-3">
+					<div>
+						<div class="flex flex-wrap items-center gap-1.5">
+							<span class={['rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider', kindBadgeClasses(selectedNode.kind)].join(' ')}>
 								{selectedNode.kind}
 							</span>
+							{#if selectedNode.meta?.severity}
+								<span class={['rounded border px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider', severityBadgeClasses(selectedNode.meta.severity)].join(' ')}>
+									{selectedNode.meta.severity}
+								</span>
+							{/if}
+							{#if selectedNode.meta?.cwe}
+								<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--mk-text-soft)]">{selectedNode.meta.cwe}</span>
+							{/if}
 						</div>
-						<div>
-							<span class="text-[10px] uppercase tracking-wider text-gray-500 block mb-1">Label</span>
-							<p class="text-xs text-gray-200 leading-snug">{selectedNode.label}</p>
-						</div>
-						{#if selectedNode.file}
-							<div>
-								<span class="text-[10px] uppercase tracking-wider text-gray-500 block mb-1">File</span>
-								<p class="text-[11px] text-gray-300 font-mono break-all leading-snug">{selectedNode.file}</p>
-							</div>
-						{/if}
-						{#if selectedNode.line_start != null}
-							<div>
-								<span class="text-[10px] uppercase tracking-wider text-gray-500 block mb-1">Line</span>
-								<p class="text-[11px] text-gray-300 font-mono leading-snug">
-									{selectedNode.line_start}{selectedNode.line_end != null && selectedNode.line_end > selectedNode.line_start ? `-${selectedNode.line_end}` : ''}
-								</p>
-							</div>
-						{/if}
-						{#if selectedNode.detail}
-							<div>
-								<span class="text-[10px] uppercase tracking-wider text-gray-500 block mb-1">Detail</span>
-								<p class="text-[11px] text-gray-300 leading-relaxed">{selectedNode.detail}</p>
-							</div>
+						<p class="mt-2 text-sm font-semibold leading-snug text-[var(--mk-text)]">{selectedNode.meta?.message ?? selectedNode.label}</p>
+						{#if nodeSubtitle(selectedNode)}
+							<p class="mt-1 break-all font-mono text-[11px] text-[var(--mk-text-muted)]">{nodeSubtitle(selectedNode)}</p>
 						{/if}
 					</div>
+
+					<div class="grid grid-cols-3 gap-2">
+						<button
+							type="button"
+							onclick={() => focusFinding(selectedNode)}
+							class="rounded border border-[var(--mk-border)] px-2 py-1.5 text-xs font-semibold text-[var(--mk-text-soft)] transition hover:border-[var(--mk-brand)] hover:text-white"
+						>
+							{selectedNode.meta?.findingId ? 'Focus finding' : 'Select node'}
+						</button>
+						<button
+							type="button"
+							disabled={!selectedNode.meta?.findingId}
+							onclick={() => locateNode(selectedNode)}
+							class="rounded border border-[var(--mk-border)] px-2 py-1.5 text-xs font-semibold text-[var(--mk-text-soft)] transition hover:border-[var(--mk-brand)] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+						>
+							Locate code
+						</button>
+						<button
+							type="button"
+							disabled={!selectedNode.meta?.findingId}
+							onclick={() => auditNode(selectedNode)}
+							class="rounded border border-[var(--mk-border)] px-2 py-1.5 text-xs font-semibold text-[var(--mk-text-soft)] transition hover:border-[var(--mk-brand)] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+						>
+							Audit
+						</button>
+					</div>
+
+					{#if relatedFindingNodes.length > 0}
+						<div>
+							<div class="mb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--mk-text-muted)]">Related findings</div>
+							<div class="space-y-2">
+								{#each relatedFindingNodes as findingNode (findingNode.id)}
+									<button
+										type="button"
+										onclick={() => selectNode(findingNode)}
+										class="w-full rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 py-2 text-left transition hover:border-[var(--mk-border-strong)]"
+									>
+										<div class="flex items-center gap-1.5">
+											<span class="rounded border border-violet-700/70 bg-violet-950/40 px-1.5 py-0.5 font-mono text-[10px] font-bold text-violet-300">
+												MAKINA-{String(findingNode.meta?.ordinal ?? 0).padStart(3, '0')}
+											</span>
+											{#if findingNode.meta?.cwe}
+												<span class="font-mono text-[10px] text-[var(--mk-text-muted)]">{findingNode.meta.cwe}</span>
+											{/if}
+										</div>
+										<p class="mt-1 max-h-9 overflow-hidden text-xs font-semibold leading-snug text-[var(--mk-text-soft)]">{findingNode.meta?.message ?? findingNode.label}</p>
+									</button>
+								{/each}
+							</div>
+						</div>
+					{/if}
+
+					{#if selectedNode.detail}
+						<pre class="max-h-[24rem] overflow-auto whitespace-pre-wrap rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] p-2 font-mono text-[11px] leading-relaxed text-[var(--mk-text-soft)]">{selectedNode.detail}</pre>
+					{:else}
+						<div class="rounded border border-dashed border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] p-2 text-xs text-[var(--mk-text-muted)]">
+							No node detail available.
+						</div>
+					{/if}
+				</div>
+			{:else}
+				<div class="space-y-4 p-3">
+					<div class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] p-3">
+						<p class="text-sm font-semibold text-[var(--mk-text)]">Graph overview</p>
+						<p class="mt-1 text-xs leading-relaxed text-[var(--mk-text-muted)]">Hover a node to highlight its upstream and downstream evidence path. Click a node to inspect code context and related findings.</p>
+					</div>
+					<div class="grid grid-cols-2 gap-2 text-xs">
+						<div class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] p-2">
+							<div class="font-mono text-lg font-bold text-[var(--mk-text)]">{layout.boxes.length}</div>
+							<div class="text-[10px] font-bold uppercase tracking-wider text-[var(--mk-text-muted)]">Components</div>
+						</div>
+						<div class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] p-2">
+							<div class="font-mono text-lg font-bold text-[var(--mk-text)]">{layout.nodes.filter((node) => node.kind === 'finding').length}</div>
+							<div class="text-[10px] font-bold uppercase tracking-wider text-[var(--mk-text-muted)]">Findings</div>
+						</div>
+					</div>
+					<button
+						type="button"
+						onclick={fitToView}
+						class="w-full rounded border border-[var(--mk-border)] px-3 py-2 text-xs font-semibold text-[var(--mk-text-soft)] transition hover:border-[var(--mk-brand)] hover:text-white"
+					>
+						Fit graph to view
+					</button>
 				</div>
 			{/if}
-		</div>
+		</aside>
 	</div>
 {/if}

@@ -1,120 +1,388 @@
 <script lang="ts">
-	import type { Finding } from '$lib/types';
-	import TraceGraph from './TraceGraph.svelte';
-	import { severityTone } from '$lib/theme';
+	import type { Finding, Severity, TraceGraph, TraceGraphNode } from '$lib/types';
+	import TraceGraphView from './TraceGraph.svelte';
 
 	let {
 		findings,
 		focusedFindingId = null,
-		onselect
+		onselect,
+		onlocate,
+		onaudit
 	}: {
 		findings: Finding[];
 		focusedFindingId?: string | null;
 		onselect: (id: string) => void;
+		onlocate?: (id: string) => void;
+		onaudit?: (id: string) => void;
 	} = $props();
 
-	const findingsWithGraph = $derived(findings.filter((f) => f.trace_graph?.nodes?.length));
-	const selectedFinding = $derived(findings.find((f) => f.id === focusedFindingId) ?? null);
+	type NodeKind = 'source' | 'function' | 'sink' | 'finding';
 
-	$effect(() => {
-		if (findings.length === 0 || selectedFinding) return;
-		if (findingsWithGraph.length > 0) {
-			onselect(findingsWithGraph[0].id);
-			return;
-		}
-		onselect(findings[0].id);
+	const severityOrder: Severity[] = ['critical', 'high', 'medium', 'low'];
+	const kindOrder: NodeKind[] = ['source', 'function', 'sink', 'finding'];
+
+	let search = $state('');
+	let cweFilter = $state('all');
+	let fileFilter = $state('all');
+	let severityEnabled = $state<Record<Severity, boolean>>({
+		critical: true,
+		high: true,
+		medium: true,
+		low: true
 	});
+	let kindEnabled = $state<Record<NodeKind, boolean>>({
+		source: true,
+		function: true,
+		sink: true,
+		finding: true
+	});
+	let resetSignal = $state(0);
 
-	function handleSelectFinding(id: string) {
-		onselect(id);
+	const findingsWithGraph = $derived(findings.filter((finding) => finding.trace_graph?.nodes?.length));
+	const findingsWithoutGraph = $derived(findings.length - findingsWithGraph.length);
+	const combinedGraph = $derived.by(() => combineGraphs(findingsWithGraph));
+	const cweOptions = $derived.by(() =>
+		Array.from(new Set(findingsWithGraph.map((finding) => finding.cwe).filter(Boolean) as string[])).sort()
+	);
+	const fileOptions = $derived.by(() => {
+		const files = new Set<string>();
+		for (const finding of findingsWithGraph) {
+			for (const node of finding.trace_graph?.nodes ?? []) {
+				if (node.file) files.add(node.file);
+			}
+		}
+		return Array.from(files).sort();
+	});
+	const filteredFindingIds = $derived.by(() => {
+		const query = search.trim().toLowerCase();
+		const ids = new Set<string>();
+		for (const finding of findingsWithGraph) {
+			if (!severityEnabled[finding.severity]) continue;
+			if (cweFilter !== 'all' && finding.cwe !== cweFilter) continue;
+			if (fileFilter !== 'all' && !(finding.trace_graph?.nodes ?? []).some((node) => node.file === fileFilter)) continue;
+			if (query && !findingMatchesQuery(finding, query)) continue;
+			ids.add(finding.id);
+		}
+		return ids;
+	});
+	const filteredGraph = $derived.by(() => filterGraph(combinedGraph, filteredFindingIds));
+
+	function combineGraphs(items: Finding[]): TraceGraph {
+		const nodes = new Map<string, TraceGraphNode>();
+		const edges = new Map<string, TraceGraph['edges'][number]>();
+
+		items.forEach((finding, index) => {
+			const graph = finding.trace_graph;
+			if (!graph) return;
+			const localNodes = new Map(graph.nodes.map((node) => [node.id, node]));
+
+			function mappedId(id: string) {
+				const node = localNodes.get(id);
+				if (node?.kind === 'finding') return `${id}:${finding.id}`;
+				return id;
+			}
+
+			for (const node of graph.nodes) {
+				const id = mappedId(node.id);
+				const existing = nodes.get(id);
+				const ordinal = index + 1;
+				const detail =
+					node.kind === 'finding'
+						? `MAKINA-${String(ordinal).padStart(3, '0')} ${finding.cwe ?? 'CWE-unknown'} ${finding.message}\n\n${node.detail ?? ''}`.trim()
+						: node.detail;
+				const nodeMeta = {
+					...(node.meta ?? {}),
+					relatedFindingIds: [finding.id],
+					severities: [finding.severity],
+					cwes: finding.cwe ? [finding.cwe] : [],
+					...(node.kind === 'finding'
+						? {
+								findingId: finding.id,
+								severity: finding.severity,
+								cwe: finding.cwe,
+								message: finding.message,
+								ruleId: finding.rule_id,
+								source: finding.source,
+								confidence: finding.confidence,
+								ordinal
+							}
+						: {})
+				};
+
+				if (!existing) {
+					nodes.set(id, {
+						...node,
+						id,
+						detail,
+						meta: nodeMeta
+					});
+					continue;
+				}
+
+				const mergedDetail = [existing.detail, detail]
+					.filter(Boolean)
+					.filter((value, valueIndex, list) => list.indexOf(value) === valueIndex)
+					.join('\n\n');
+				const relatedFindingIds = mergeList(existing.meta?.relatedFindingIds, [finding.id]);
+				const severities = mergeList(existing.meta?.severities, [finding.severity]);
+				const cwes = mergeList(existing.meta?.cwes, finding.cwe ? [finding.cwe] : []);
+				nodes.set(id, {
+					...existing,
+					file: existing.file ?? node.file,
+					line_start: existing.line_start ?? node.line_start,
+					line_end: existing.line_end ?? node.line_end,
+					detail: mergedDetail || existing.detail,
+					meta: {
+						...(existing.meta ?? {}),
+						relatedFindingIds,
+						severities,
+						cwes
+					}
+				});
+			}
+
+			for (const edge of graph.edges) {
+				const source = mappedId(edge.source);
+				const target = mappedId(edge.target);
+				const id = `${source}->${target}:${edge.kind}`;
+				if (edges.has(id)) continue;
+				edges.set(id, {
+					...edge,
+					id,
+					source,
+					target
+				});
+			}
+		});
+
+		return {
+			nodes: Array.from(nodes.values()),
+			edges: Array.from(edges.values())
+		};
+	}
+
+	function filterGraph(graph: TraceGraph, visibleFindingIds: Set<string>): TraceGraph {
+		const visibleNodes = graph.nodes.filter((node) => {
+			if (!kindEnabled[kindKey(node.kind)]) return false;
+			if (node.kind === 'finding') {
+				const findingId = node.meta?.findingId;
+				return Boolean(findingId && visibleFindingIds.has(findingId));
+			}
+			return (node.meta?.relatedFindingIds ?? []).some((id) => visibleFindingIds.has(id));
+		});
+		const nodeIds = new Set(visibleNodes.map((node) => node.id));
+		return {
+			nodes: visibleNodes,
+			edges: graph.edges.filter((edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target))
+		};
+	}
+
+	function findingMatchesQuery(finding: Finding, query: string) {
+		const haystack = [
+			finding.rule_id,
+			finding.cwe,
+			finding.message,
+			finding.source,
+			finding.code_snippet,
+			...(finding.trace_graph?.nodes ?? []).flatMap((node) => [node.label, node.file, node.detail])
+		]
+			.filter(Boolean)
+			.join('\n')
+			.toLowerCase();
+		return haystack.includes(query);
+	}
+
+	function mergeList<T>(left: T[] | undefined, right: T[]) {
+		return Array.from(new Set([...(left ?? []), ...right]));
+	}
+
+	function kindKey(kind: string): NodeKind {
+		return kindOrder.includes(kind as NodeKind) ? (kind as NodeKind) : 'function';
+	}
+
+	function toggleSeverity(severity: Severity) {
+		severityEnabled = {
+			...severityEnabled,
+			[severity]: !severityEnabled[severity]
+		};
+	}
+
+	function toggleKind(kind: NodeKind) {
+		kindEnabled = {
+			...kindEnabled,
+			[kind]: !kindEnabled[kind]
+		};
+	}
+
+	function resetFilters() {
+		search = '';
+		cweFilter = 'all';
+		fileFilter = 'all';
+		severityEnabled = {
+			critical: true,
+			high: true,
+			medium: true,
+			low: true
+		};
+		kindEnabled = {
+			source: true,
+			function: true,
+			sink: true,
+			finding: true
+		};
+		resetSignal += 1;
+	}
+
+	function handleNodeSelect(node: TraceGraphNode) {
+		const findingId = node.meta?.findingId;
+		if (findingId) onselect(findingId);
+	}
+
+	function handleNodeLocate(node: TraceGraphNode) {
+		const findingId = node.meta?.findingId;
+		if (findingId) onlocate?.(findingId);
+	}
+
+	function handleNodeAudit(node: TraceGraphNode) {
+		const findingId = node.meta?.findingId;
+		if (findingId) onaudit?.(findingId);
 	}
 </script>
 
-<div class="flex h-full w-full">
-	<!-- Left navigator -->
-	<div class="w-72 shrink-0 flex flex-col border-r border-[var(--mk-border)] bg-[var(--mk-bg-panel)]">
-		<div class="px-3 py-2 border-b border-[var(--mk-border)] flex items-center justify-between">
-			<span class="text-[10px] font-bold uppercase tracking-wider text-gray-500">Findings</span>
-			<span class="text-[10px] text-gray-500 tabular-nums">{findingsWithGraph.length} with trace</span>
+<div class="flex h-full min-h-0 w-full flex-col bg-[var(--mk-bg)]">
+	<div class="shrink-0 border-b border-[var(--mk-border)] bg-[var(--mk-bg-panel)]">
+		<div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+			<div>
+				<div class="text-[10px] font-bold uppercase tracking-[0.24em] text-[var(--mk-text-muted)]">Trace Graph</div>
+				<div class="mt-1 text-sm font-semibold text-[var(--mk-text)]">Combined call graph for this case</div>
+			</div>
+			<div class="flex flex-wrap items-center gap-2 font-mono text-[10px] text-[var(--mk-text-muted)]">
+				<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 py-1">{findings.length} findings</span>
+				<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 py-1">{filteredFindingIds.size}/{findingsWithGraph.length} traced</span>
+				<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 py-1">{findingsWithoutGraph} without trace</span>
+				<span class="rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 py-1">{filteredGraph.nodes.length}/{combinedGraph.nodes.length} nodes</span>
+			</div>
 		</div>
-		<div class="flex-1 overflow-y-auto p-2 space-y-1">
-			{#if findings.length === 0}
-				<div class="flex flex-col items-center justify-center gap-3 py-10 text-center px-3">
-					<svg class="h-6 w-6 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
-					</svg>
-					<div class="space-y-0.5">
-						<p class="text-sm font-medium text-gray-300">No findings</p>
-						<p class="text-xs text-gray-500">Run a scan to populate trace graphs</p>
-					</div>
-				</div>
-			{:else}
-				{#each findings as finding (finding.id)}
-					{@const tone = severityTone(finding.severity)}
+
+		<div class="flex flex-wrap items-center gap-2 border-t border-[var(--mk-border)] px-4 py-2">
+			<label class="min-w-[14rem] flex-1">
+				<span class="sr-only">Search trace graph</span>
+				<input
+					bind:value={search}
+					placeholder="Search function, file, CWE..."
+					class="h-8 w-full rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-3 text-xs text-[var(--mk-text)] outline-none transition focus:border-[var(--mk-brand)]"
+				/>
+			</label>
+			<select
+				bind:value={cweFilter}
+				class="h-8 rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 text-xs font-semibold text-[var(--mk-text-soft)] outline-none transition focus:border-[var(--mk-brand)]"
+				aria-label="Filter by CWE"
+			>
+				<option value="all">All CWEs</option>
+				{#each cweOptions as cwe}
+					<option value={cwe}>{cwe}</option>
+				{/each}
+			</select>
+			<select
+				bind:value={fileFilter}
+				class="h-8 max-w-[16rem] rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-2 text-xs font-semibold text-[var(--mk-text-soft)] outline-none transition focus:border-[var(--mk-brand)]"
+				aria-label="Filter by file"
+			>
+				<option value="all">All files</option>
+				{#each fileOptions as file}
+					<option value={file}>{file}</option>
+				{/each}
+			</select>
+
+			<div class="flex items-center gap-1 rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] p-0.5">
+				{#each severityOrder as severity}
 					<button
+						type="button"
+						onclick={() => toggleSeverity(severity)}
 						class={[
-							'w-full text-left rounded border px-2.5 py-2 transition-all',
-							finding.id === focusedFindingId
-								? 'border-violet-500/60 bg-violet-950/20 ring-1 ring-violet-500/30'
-								: 'border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] hover:border-[var(--mk-border-strong)] hover:bg-[var(--mk-bg-hover)]'
+							'rounded px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition',
+							severityEnabled[severity]
+								? 'bg-[var(--mk-brand)] text-white'
+								: 'text-[var(--mk-text-muted)] hover:bg-[var(--mk-bg-hover)] hover:text-[var(--mk-text)]'
 						].join(' ')}
-						onclick={() => handleSelectFinding(finding.id)}
 					>
-						<div class="flex items-center gap-1.5 mb-1">
-							<span
-								class={[
-									'text-[9px] font-semibold px-1.5 py-0.5 rounded-full border uppercase tracking-wide shrink-0',
-									tone.badge
-								].join(' ')}
-							>
-								{finding.severity}
-							</span>
-							<span class="text-[10px] font-mono text-gray-400 truncate">{finding.rule_id}</span>
-						</div>
-						<p class="text-[11px] text-gray-200 leading-snug line-clamp-2">{finding.message}</p>
-						{#if finding.trace_graph?.nodes?.length}
-							<span class="mt-1 inline-flex items-center text-[10px] text-[var(--mk-text-muted)]">
-								<svg class="w-3 h-3 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-									<path stroke-linecap="round" stroke-linejoin="round" d="M7.5 14.25v2.25m3-4.5v4.5m3-6.75v6.75m3-9v9M6 20.25h12A2.25 2.25 0 0020.25 18V6A2.25 2.25 0 0018 3.75H6A2.25 2.25 0 003.75 6v12A2.25 2.25 0 006 20.25z" />
-								</svg>
-								{finding.trace_graph.nodes.length} nodes
-							</span>
-						{:else}
-							<span class="mt-1 inline-flex items-center text-[10px] text-gray-600">
-								No trace graph
-							</span>
-						{/if}
+						{severity}
 					</button>
 				{/each}
-			{/if}
+			</div>
+
+			<div class="flex items-center gap-1 rounded border border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] p-0.5">
+				{#each kindOrder as kind}
+					<button
+						type="button"
+						onclick={() => toggleKind(kind)}
+						class={[
+							'rounded px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition',
+							kindEnabled[kind]
+								? 'bg-[var(--mk-bg-hover)] text-[var(--mk-text)]'
+								: 'text-[var(--mk-text-muted)] hover:bg-[var(--mk-bg-hover)] hover:text-[var(--mk-text)]'
+						].join(' ')}
+					>
+						{kind}
+					</button>
+				{/each}
+			</div>
+
+			<button
+				type="button"
+				onclick={resetFilters}
+				class="h-8 rounded border border-[var(--mk-border)] px-3 text-xs font-semibold text-[var(--mk-text-muted)] transition hover:border-[var(--mk-border-strong)] hover:text-[var(--mk-text)]"
+			>
+				Reset
+			</button>
 		</div>
 	</div>
 
-	<!-- Right workspace -->
-	<div class="flex-1 min-w-0 flex flex-col bg-[var(--mk-bg)] overflow-hidden">
-		{#if !selectedFinding}
-			<div class="flex flex-1 items-center justify-center">
-				<div class="text-center space-y-3 px-4">
-					<svg class="w-10 h-10 mx-auto text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+	<div class="min-h-0 flex-1">
+		{#if findings.length === 0}
+			<div class="flex h-full items-center justify-center">
+				<div class="max-w-sm text-center">
+					<svg class="mx-auto mb-3 h-9 w-9 text-[var(--mk-text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
 						<path stroke-linecap="round" stroke-linejoin="round" d="M7.5 14.25v2.25m3-4.5v4.5m3-6.75v6.75m3-9v9M6 20.25h12A2.25 2.25 0 0020.25 18V6A2.25 2.25 0 0018 3.75H6A2.25 2.25 0 003.75 6v12A2.25 2.25 0 006 20.25z" />
 					</svg>
-					<p class="text-sm text-gray-400">Select a finding to view its trace graph</p>
+					<p class="text-sm font-semibold text-[var(--mk-text)]">No findings</p>
+					<p class="mt-1 text-xs text-[var(--mk-text-muted)]">Run a scan to populate trace graphs.</p>
 				</div>
 			</div>
-		{:else if !selectedFinding.trace_graph?.nodes?.length}
-			<div class="flex flex-1 items-center justify-center">
-				<div class="text-center space-y-3 max-w-sm px-4">
-					<svg class="w-10 h-10 mx-auto text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M7.5 14.25v2.25m3-4.5v4.5m3-6.75v6.75m3-9v9M6 20.25h12A2.25 2.25 0 0020.25 18V6A2.25 2.25 0 0018 3.75H6A2.25 2.25 0 003.75 6v12A2.25 2.25 0 006 20.25z" />
+		{:else if combinedGraph.nodes.length === 0}
+			<div class="flex h-full items-center justify-center">
+				<div class="max-w-sm text-center">
+					<svg class="mx-auto mb-3 h-9 w-9 text-[var(--mk-text-muted)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
 					</svg>
-					<p class="text-sm text-gray-400">No trace evidence available</p>
-					<p class="text-xs text-gray-500 leading-relaxed">
-						This finding does not have an associated taint graph. Run a scan that includes taint analysis to generate trace data.
-					</p>
+					<p class="text-sm font-semibold text-[var(--mk-text)]">No trace graph evidence</p>
+					<p class="mt-1 text-xs text-[var(--mk-text-muted)]">The current findings do not include source-to-sink graph data.</p>
+				</div>
+			</div>
+		{:else if filteredGraph.nodes.length === 0}
+			<div class="flex h-full items-center justify-center">
+				<div class="max-w-sm text-center">
+					<p class="text-sm font-semibold text-[var(--mk-text)]">No matching trace nodes</p>
+					<p class="mt-1 text-xs text-[var(--mk-text-muted)]">Relax the filters to bring trace evidence back into scope.</p>
+					<button
+						type="button"
+						onclick={resetFilters}
+						class="mt-4 rounded border border-[var(--mk-border-strong)] px-3 py-1.5 text-xs font-semibold text-[var(--mk-text-soft)] transition hover:border-[var(--mk-brand)] hover:text-white"
+					>
+						Reset filters
+					</button>
 				</div>
 			</div>
 		{:else}
-			<TraceGraph graph={selectedFinding.trace_graph} variant="workspace" />
+			<TraceGraphView
+				graph={filteredGraph}
+				variant="workspace"
+				{focusedFindingId}
+				{resetSignal}
+				onselectnode={handleNodeSelect}
+				onlocatenode={handleNodeLocate}
+				onauditnode={handleNodeAudit}
+			/>
 		{/if}
 	</div>
 </div>

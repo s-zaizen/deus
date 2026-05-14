@@ -42,6 +42,21 @@ export interface TraceGraphNode {
   line_start?: number | null;
   line_end?: number | null;
   detail?: string | null;
+  meta?: TraceGraphNodeMeta | null;
+}
+
+export interface TraceGraphNodeMeta {
+  findingId?: string | null;
+  relatedFindingIds?: string[];
+  severity?: Severity | null;
+  severities?: Severity[];
+  cwe?: string | null;
+  cwes?: string[];
+  message?: string | null;
+  ruleId?: string | null;
+  source?: string | null;
+  confidence?: number | null;
+  ordinal?: number | null;
 }
 
 export interface TraceGraphEdge {

@@ -315,6 +315,35 @@
 		activeTab = 'scan';
 	}
 
+	function findingSourceFile(id: string): FileNode | null {
+		if (!folderRoot) return null;
+		for (const file of flatFiles(folderRoot)) {
+			if ((scannedFindingsByPath.get(file.path) ?? []).some((finding) => finding.id === id)) {
+				return file;
+			}
+		}
+		return null;
+	}
+
+	function handleAuditFinding(id: string) {
+		const sourceFile = findingSourceFile(id);
+		const finding =
+			(sourceFile ? scannedFindingsByPath.get(sourceFile.path)?.find((candidate) => candidate.id === id) : null)
+			?? findings.find((candidate) => candidate.id === id);
+		if (!finding) return;
+
+		auditCase = {
+			id: crypto.randomUUID(),
+			scanId: sourceFile ? (scanIdsByPath.get(sourceFile.path) ?? currentScanId) : currentScanId,
+			code: sourceFile?.content ?? code,
+			language: sourceFile?.language ?? language,
+			findings: [finding],
+			createdAt: new Date().toISOString()
+		};
+		focusedFindingId = id;
+		activeTab = 'audit';
+	}
+
 	async function handleFolderDrop(item: DataTransferItem) {
 		const root = await readFolder(item);
 		if (!root) return;
@@ -440,7 +469,7 @@
 	}
 </script>
 
-<div class="mk-app-bg relative flex h-screen overflow-hidden text-[var(--mk-text)]">
+<div class="mk-app-bg relative flex h-screen w-screen overflow-hidden text-[var(--mk-text)]">
 
 	<!-- Left rail: icon-only vertical tabs -->
 	<aside class="mk-rail relative z-10 flex h-full w-16 shrink-0 flex-col border-r">
@@ -711,8 +740,14 @@
 			</div>
 		</div>
 		{#if activeTab === 'graph'}
-			<div class="flex flex-1 min-h-0" style:display={activeTab === 'graph' ? 'flex' : 'none'} aria-hidden={activeTab !== 'graph'}>
-				<GraphTab findings={graphFindings} {focusedFindingId} onselect={handleSelectFinding} />
+			<div class="flex w-full flex-1 min-h-0" style:display={activeTab === 'graph' ? 'flex' : 'none'} aria-hidden={activeTab !== 'graph'}>
+				<GraphTab
+					findings={graphFindings}
+					{focusedFindingId}
+					onselect={handleSelectFinding}
+					onlocate={handleFocusFinding}
+					onaudit={handleAuditFinding}
+				/>
 			</div>
 		{/if}
 		{#if activeTab === 'verify'}

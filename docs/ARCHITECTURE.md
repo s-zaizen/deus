@@ -209,8 +209,17 @@ changing the core `Finding` identity.
 
 The Graph tab consumes `trace_graph` directly. It is a reader of scanner
 evidence, not a second detector: if a finding has no trace graph, the tab
-does not synthesize one. This keeps visualization, Audit, PDF export, and
-future RAG consumers aligned around the same API evidence contract.
+does not invent source-to-sink evidence. The tab merges every finding's
+trace graph into one case-level call graph, so users can inspect the full
+source/function/sink/finding structure without first selecting a single
+finding. The frontend then lays the merged graph out by weakly connected
+component, adds severity/CWE/file filters, and lets users pan, zoom, inspect
+nodes, and highlight upstream/downstream paths. Large rank layers wrap into
+multiple columns so repeated finding nodes remain visible without forcing a
+very tall canvas. This keeps visualization,
+Audit, PDF export, and future RAG consumers aligned around the same API
+evidence contract while avoiding a separate state-space or runtime-exploration
+view.
 
 `POST /api/scan/project` is the multi-file variant used by the Scan All
 UI. The frontend sends every dropped file with its detected language.
