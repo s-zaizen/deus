@@ -147,7 +147,7 @@ export interface ModelMetrics {
   solo_samples?: number | null;
 }
 
-export interface VerifyCase {
+export interface ReviewCase {
   caseNo: number;
   cveId?: string | null;
   code: string;

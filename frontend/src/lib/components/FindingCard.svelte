@@ -8,24 +8,24 @@
 		finding,
 		language,
 		onlabel,
-		onverify,
+		onreview,
 		onclose,
 		onfocus,
 		focused = false,
 		readonly = false,
 		existingLabel = null,
-		queuedForVerify = false
+		queuedForReview = false
 	}: {
 		finding: Finding;
 		language: Language;
 		onlabel?: (id: string, label: Label) => Promise<void>;
-		onverify?: (id: string) => Promise<void> | void;
+		onreview?: (id: string) => Promise<void> | void;
 		onclose?: (id: string) => Promise<void> | void;
 		onfocus?: () => void;
 		focused?: boolean;
 		readonly?: boolean;
 		existingLabel?: Label | null;
-		queuedForVerify?: boolean;
+		queuedForReview?: boolean;
 	} = $props();
 
 	let interactiveLabel = $state<Label | null>(null);
@@ -74,12 +74,12 @@
 		}
 	}
 
-	async function handleVerify(e: MouseEvent) {
+	async function handleReview(e: MouseEvent) {
 		e.stopPropagation();
-		if (!onverify || queuedForVerify) return;
+		if (!onreview || queuedForReview) return;
 		loading = true;
 		try {
-			await onverify(finding.id);
+			await onreview(finding.id);
 		} finally {
 			loading = false;
 		}
@@ -189,19 +189,19 @@
 		{/if}
 	{:else if !onlabel}
 		<div class="grid grid-cols-1 gap-2 mt-1">
-			{#if onverify}
+			{#if onreview}
 				<button
-					onclick={handleVerify}
-					disabled={loading || closing || queuedForVerify}
+					onclick={handleReview}
+					disabled={loading || closing || queuedForReview}
 					class={[
 						'flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded border transition-colors',
-						queuedForVerify
+						queuedForReview
 							? 'bg-[var(--mk-border)] border-[var(--mk-border-strong)] text-gray-500 cursor-not-allowed'
 							: 'bg-violet-950/35 border-violet-700 text-violet-200 hover:bg-violet-950/60 cursor-pointer'
 					].join(' ')}
 				>
-					<span>{queuedForVerify ? '✓' : '→'}</span>
-					{queuedForVerify ? 'In Verify' : loading ? 'Sending...' : 'Send to Verify'}
+					<span>{queuedForReview ? '✓' : '→'}</span>
+					{queuedForReview ? 'In Review' : loading ? 'Submitting...' : 'Submit to Review'}
 				</button>
 			{/if}
 

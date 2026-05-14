@@ -192,7 +192,7 @@ pub struct ManualFindingRequest {
     pub message: String,
     /// Opaque grouping key (e.g. CVE id) used by the GBDT trainer to keep
     /// related samples together when splitting train/val. Optional so the
-    /// regular Verify-Submit flow keeps working without it.
+    /// regular Review-Submit flow keeps working without it.
     #[serde(default)]
     pub group_key: Option<String>,
 }
@@ -206,10 +206,10 @@ pub struct StatsResponse {
     pub labels_until_next_stage: i64,
 }
 
-// ── Verify queue ────────────────────────────────────────────────────────────
+// ── Review queue (`/api/verify/queue`) ──────────────────────────────────────
 
 #[derive(Debug, Serialize)]
-pub struct VerifyQueueCase {
+pub struct ReviewQueueCase {
     pub case_no: i64,
     pub cve_id: Option<String>,
     pub code: String,
@@ -321,7 +321,7 @@ pub struct AuditReportSection {
 }
 
 /// Shared `?skip_train=true` query — used by Knowledge submit and
-/// Verify queue removal so the bulk-import path can defer retraining
+/// Review queue removal so the bulk-import path can defer retraining
 /// to a single trailing `/api/retrain` call.
 #[derive(Debug, Deserialize, Default)]
 pub struct SkipTrainQuery {

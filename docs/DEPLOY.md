@@ -169,7 +169,7 @@ static SvelteKit build globally; first paint is sub-100ms.
 
 `PUBLIC_MAKINA_PUBLIC_MODE=true` must match the backend
 `MAKINA_PUBLIC_MODE=true` setting. In that mode the UI keeps Scan,
-Knowledge, and Model available, but presents Verify and Audit as
+Knowledge, and Model available, but presents Review and Audit as
 disabled demo-only surfaces; provider API keys are never collected by
 the public frontend and `/api/audit/run` is not registered by the
 backend.

@@ -10,14 +10,14 @@
 	import ModelTab from '$lib/components/ModelTab.svelte';
 	import ScanPanel from '$lib/components/ScanPanel.svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
-	import VerifyTab from '$lib/components/VerifyTab.svelte';
+	import ReviewTab from '$lib/components/ReviewTab.svelte';
 	import {
 		scanCode,
 		scanProject,
 		getStats,
-		getVerifyQueue,
-		addToVerifyQueue,
-		closeVerifyCase,
+		getReviewQueue,
+		addToReviewQueue,
+		closeReviewCase,
 		getKnowledgeHistory,
 		submitToKnowledge
 	} from '$lib/api';
@@ -25,17 +25,17 @@
 	import { readFolder, flatFiles } from '$lib/folder';
 	import { PLACEHOLDERS } from '$lib/placeholders';
 	import { PUBLIC_MODE } from '$lib/flags';
-	import type { AuditCase, Finding, Language, Label, Stats, VerifyCase, KnowledgeCase, FileNode, TraceGraphNode } from '$lib/types';
+	import type { AuditCase, Finding, Language, Label, Stats, ReviewCase, KnowledgeCase, FileNode, TraceGraphNode } from '$lib/types';
 
-	type Tab = 'scan' | 'graph' | 'audit' | 'verify' | 'knowledge' | 'model';
+	type Tab = 'scan' | 'graph' | 'audit' | 'review' | 'knowledge' | 'model';
 
-	const VISIBLE_TABS: readonly Tab[] = ['scan', 'graph', 'audit', 'verify', 'knowledge', 'model'] as const;
+	const VISIBLE_TABS: readonly Tab[] = ['scan', 'graph', 'audit', 'review', 'knowledge', 'model'] as const;
 
 	const TAB_DESCRIPTIONS: Record<Tab, string> = {
 		scan: 'Scan code for vulnerabilities',
-		graph: 'Trace graph workspace',
+		graph: 'Trace call graph',
 		audit: 'Run LLM audit workflow',
-		verify: 'Review and label findings',
+		review: 'Review and label findings',
 		knowledge: 'Browse verified cases',
 		model: 'View model training status'
 	};
@@ -58,7 +58,7 @@
 	let focusedLineToken = $state(0);
 
 	let auditCase = $state<AuditCase | null>(null);
-	let verifyCases = $state<VerifyCase[]>([]);
+	let reviewCases = $state<ReviewCase[]>([]);
 	let knowledgeHistory = $state<KnowledgeCase[]>([]);
 
 	let folderRoot = $state<FileNode | null>(null);
@@ -104,7 +104,7 @@
 
 	async function refreshHeavy() {
 		try {
-			verifyCases = await getVerifyQueue();
+			reviewCases = await getReviewQueue();
 		} catch { /* backend not running */ }
 		try {
 			knowledgeHistory = await getKnowledgeHistory();
@@ -262,7 +262,7 @@
 	}
 
 	function handleCaseLabel(caseNo: number, findingId: string, label: Label) {
-		verifyCases = verifyCases.map((vc) =>
+		reviewCases = reviewCases.map((vc) =>
 			vc.caseNo === caseNo
 				? { ...vc, labels: { ...vc.labels, [findingId]: label } }
 				: vc
@@ -270,7 +270,7 @@
 	}
 
 	async function handleCaseSubmit(caseNo: number) {
-		const vc = verifyCases.find((c) => c.caseNo === caseNo);
+		const vc = reviewCases.find((c) => c.caseNo === caseNo);
 		if (!vc) return;
 
 		await submitToKnowledge(caseNo, vc.labels);
@@ -286,15 +286,15 @@
 			verifiedAt: new Date().toISOString()
 		};
 		knowledgeHistory = [knowledgeCase, ...knowledgeHistory];
-		verifyCases = verifyCases.filter((c) => c.caseNo !== caseNo);
+		reviewCases = reviewCases.filter((c) => c.caseNo !== caseNo);
 		await refreshStats();
 	}
 
 	async function handleCaseClose(caseNo: number) {
-		const vc = verifyCases.find((c) => c.caseNo === caseNo);
+		const vc = reviewCases.find((c) => c.caseNo === caseNo);
 		if (!vc) return;
 
-		await closeVerifyCase(caseNo);
+		await closeReviewCase(caseNo);
 
 		const knowledgeCase: KnowledgeCase = {
 			caseNo: vc.caseNo,
@@ -307,7 +307,7 @@
 			verifiedAt: new Date().toISOString()
 		};
 		knowledgeHistory = [knowledgeCase, ...knowledgeHistory];
-		verifyCases = verifyCases.filter((c) => c.caseNo !== caseNo);
+		reviewCases = reviewCases.filter((c) => c.caseNo !== caseNo);
 		await refreshStats();
 	}
 
@@ -521,16 +521,16 @@
 		scanProgress = null;
 	}
 
-	function isFindingQueuedForVerify(id: string) {
-		return verifyCases.some((verifyCase) =>
-			verifyCase.findings.some((finding) => finding.id === id)
+	function isFindingQueuedForReview(id: string) {
+		return reviewCases.some((reviewCase) =>
+			reviewCase.findings.some((finding) => finding.id === id)
 		);
 	}
 
-	async function handleFindingVerify(id: string) {
+	async function handleFindingReview(id: string) {
 		if (PUBLIC_MODE) return;
-		if (isFindingQueuedForVerify(id)) {
-			activeTab = 'verify';
+		if (isFindingQueuedForReview(id)) {
+			activeTab = 'review';
 			return;
 		}
 
@@ -541,19 +541,19 @@
 		if (!finding) return;
 
 		try {
-			const verifyCase = await addToVerifyQueue(
+			const reviewCase = await addToReviewQueue(
 				null,
 				sourceFile?.content ?? code,
 				sourceFile?.language ?? language,
 				[finding]
 			);
-			verifyCases = [verifyCase, ...verifyCases];
+			reviewCases = [reviewCase, ...reviewCases];
 			focusedFindingId = id;
 			focusedLineOverride = null;
-			activeTab = 'verify';
+			activeTab = 'review';
 			error = null;
 		} catch {
-			error = 'Cannot send this finding to Verify. Run: docker compose up -d --build backend';
+			error = 'Cannot submit this finding to Review. Run: docker compose up -d --build backend';
 		}
 	}
 
@@ -608,7 +608,7 @@
 							<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
 								<path stroke-linecap="round" stroke-linejoin="round" d="M9 6.75h6M9 12h6m-6 5.25h3.5M5.25 3.75h13.5A1.5 1.5 0 0120.25 5.25v13.5a1.5 1.5 0 01-1.5 1.5H5.25a1.5 1.5 0 01-1.5-1.5V5.25a1.5 1.5 0 011.5-1.5z" />
 							</svg>
-						{:else if tab === 'verify'}
+						{:else if tab === 'review'}
 							<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
 								<path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
 							</svg>
@@ -621,9 +621,9 @@
 								<path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" />
 							</svg>
 						{/if}
-						{#if tab === 'verify' && verifyCases.length > 0 && !PUBLIC_MODE}
+						{#if tab === 'review' && reviewCases.length > 0 && !PUBLIC_MODE}
 							<span class="absolute -top-1 -right-1.5 w-4 h-4 text-[10px] font-bold bg-violet-500 text-white rounded-full flex items-center justify-center">
-								{verifyCases.length}
+								{reviewCases.length}
 							</span>
 						{/if}
 					</span>
@@ -800,10 +800,10 @@
 					{resultsStale}
 					{language}
 					{focusedFindingId}
-					onverify={handleFindingVerify}
+					onreview={handleFindingReview}
 					onclose={handleFindingClose}
 					onfocus={handleFocusFinding}
-					isQueuedForVerify={isFindingQueuedForVerify}
+					isQueuedForReview={isFindingQueuedForReview}
 				/>
 			</div>
 
@@ -836,10 +836,10 @@
 					{resultsStale}
 					{language}
 					{focusedFindingId}
-					onverify={handleFindingVerify}
+					onreview={handleFindingReview}
 					onclose={handleFindingClose}
 					onfocus={handleFocusFinding}
-					isQueuedForVerify={isFindingQueuedForVerify}
+					isQueuedForReview={isFindingQueuedForReview}
 				/>
 			</div>
 		</div>
@@ -859,10 +859,10 @@
 				/>
 			</div>
 		{/if}
-		{#if activeTab === 'verify'}
-			<div class="flex flex-1 min-h-0" style:display={activeTab === 'verify' ? 'flex' : 'none'} aria-hidden={activeTab !== 'verify'}>
-				<VerifyTab
-					cases={verifyCases}
+		{#if activeTab === 'review'}
+			<div class="flex flex-1 min-h-0" style:display={activeTab === 'review' ? 'flex' : 'none'} aria-hidden={activeTab !== 'review'}>
+				<ReviewTab
+					cases={reviewCases}
 					onlabel={handleCaseLabel}
 					onsubmit={handleCaseSubmit}
 					onclose={handleCaseClose}

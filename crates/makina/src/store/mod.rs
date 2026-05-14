@@ -327,7 +327,7 @@ pub fn get_stats() -> Result<Stats> {
     })
 }
 
-// ── Verify queue ──────────────────────────────────────────────────────────────
+// ── Review queue (`verify.db`) ────────────────────────────────────────────────
 
 pub fn add_queue_item(
     cve_id: Option<&str>,
@@ -583,7 +583,7 @@ mod tests {
         let (case_no, _) =
             add_queue_item(Some("CVE-2024-77"), "code body", "python", "[]").unwrap();
 
-        // Initially in the verify queue, absent from knowledge.
+        // Initially in the Review queue, absent from knowledge.
         assert_eq!(get_queue_items().unwrap().len(), 1);
         assert!(get_knowledge_items().unwrap().is_empty());
 

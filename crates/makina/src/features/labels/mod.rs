@@ -1,5 +1,5 @@
 //! `POST /api/feedback` — low-level TP/FP label endpoint for a single
-//! finding. The main UI learning path goes through Verify Submit.
+//! finding. The main UI learning path goes through Review Submit.
 
 use axum::{
     extract::{Extension, Json},

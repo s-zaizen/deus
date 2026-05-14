@@ -1,8 +1,8 @@
-//! `/api/verify/queue` — pending Verify-tab cases.
+//! `/api/verify/queue` — pending Review-tab cases.
 //!
 //! `list` returns everything currently awaiting human review,
 //! `add` enqueues a new case, `remove` archives a case to the
-//! Knowledge tab (without per-finding labels — used by Verify's
+//! Knowledge tab (without per-finding labels — used by Review's
 //! "submit empty" path) and triggers retrain unless `?skip_train=true`.
 
 use axum::{
@@ -12,7 +12,7 @@ use axum::{
 };
 use tracing::info;
 
-use crate::api::models::{AddToQueueRequest, Finding, SkipTrainQuery, VerifyQueueCase};
+use crate::api::models::{AddToQueueRequest, Finding, ReviewQueueCase, SkipTrainQuery};
 use crate::infra::ml::MlClient;
 use crate::logging::RequestId;
 use crate::store;
@@ -21,12 +21,12 @@ pub async fn list() -> Result<impl IntoResponse, (StatusCode, String)> {
     let items =
         store::get_queue_items().map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    let cases: Vec<VerifyQueueCase> = items
+    let cases: Vec<ReviewQueueCase> = items
         .into_iter()
         .map(|item| {
             let findings: Vec<Finding> =
                 serde_json::from_str(&item.findings_json).unwrap_or_default();
-            VerifyQueueCase {
+            ReviewQueueCase {
                 case_no: item.case_no,
                 cve_id: item.cve_id,
                 code: item.code,
@@ -54,7 +54,7 @@ pub async fn add(
     )
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(VerifyQueueCase {
+    Ok(Json(ReviewQueueCase {
         case_no,
         cve_id: req.cve_id,
         code: req.code,

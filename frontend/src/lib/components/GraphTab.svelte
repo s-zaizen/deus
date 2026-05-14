@@ -255,7 +255,7 @@
 	<div class="shrink-0 border-b border-[var(--mk-border)] bg-[var(--mk-bg-panel)]">
 		<div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
 			<div>
-				<div class="text-[10px] font-bold uppercase tracking-[0.24em] text-[var(--mk-text-muted)]">Trace Graph</div>
+				<div class="text-[10px] font-bold uppercase tracking-[0.24em] text-[var(--mk-text-muted)]">Trace</div>
 				<div class="mt-1 text-sm font-semibold text-[var(--mk-text)]">Combined call graph for this case</div>
 			</div>
 			<div class="flex flex-wrap items-center gap-2 font-mono text-[10px] text-[var(--mk-text-muted)]">

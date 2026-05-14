@@ -269,7 +269,7 @@ impl MlClient {
         Ok(body)
     }
 
-    /// Fire-and-forget train — used after every Verify Submit and
+    /// Fire-and-forget train — used after every Review Submit and
     /// every 10 individual feedback labels.
     pub fn spawn_train(&self, req_id: &str) {
         let http = self.http.clone();

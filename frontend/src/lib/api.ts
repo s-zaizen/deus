@@ -6,7 +6,7 @@ import type {
 	Stats,
 	Language,
 	Label,
-	VerifyCase,
+	ReviewCase,
 	KnowledgeCase,
 	ModelMetrics
 } from './types';
@@ -86,9 +86,9 @@ export async function addManualFinding(
 	return res.json();
 }
 
-// ── Verify queue ───────────────────────────────────────────────────────────────
+// ── Review queue (`/api/verify/queue`) ─────────────────────────────────────────
 
-interface BackendVerifyCase {
+interface BackendReviewCase {
 	case_no: number;
 	cve_id: string | null;
 	code: string;
@@ -97,7 +97,7 @@ interface BackendVerifyCase {
 	submitted_at: string;
 }
 
-function mapCase(b: BackendVerifyCase): VerifyCase {
+function mapCase(b: BackendReviewCase): ReviewCase {
 	return {
 		caseNo: b.case_no,
 		cveId: b.cve_id,
@@ -109,30 +109,30 @@ function mapCase(b: BackendVerifyCase): VerifyCase {
 	};
 }
 
-export async function getVerifyQueue(): Promise<VerifyCase[]> {
+export async function getReviewQueue(): Promise<ReviewCase[]> {
 	const res = await fetch(`${BASE}/api/verify/queue`);
 	if (!res.ok) throw new Error(`Queue fetch failed: ${res.status}`);
-	const items: BackendVerifyCase[] = await res.json();
+	const items: BackendReviewCase[] = await res.json();
 	return items.map(mapCase);
 }
 
-export async function addToVerifyQueue(
+export async function addToReviewQueue(
 	cveId: string | null,
 	code: string,
 	language: Language,
 	findings: Finding[]
-): Promise<VerifyCase> {
+): Promise<ReviewCase> {
 	const res = await fetch(`${BASE}/api/verify/queue`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ cve_id: cveId, code, language, findings })
 	});
 	if (!res.ok) throw new Error(`Queue add failed: ${res.status}`);
-	const item: BackendVerifyCase = await res.json();
+	const item: BackendReviewCase = await res.json();
 	return mapCase(item);
 }
 
-export async function closeVerifyCase(caseNo: number): Promise<void> {
+export async function closeReviewCase(caseNo: number): Promise<void> {
 	const res = await fetch(`${BASE}/api/verify/queue/${caseNo}`, {
 		method: 'DELETE'
 	});

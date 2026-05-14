@@ -2,8 +2,8 @@
 
 ## Design Philosophy
 
-makina is a security scanner that continuously self-learns from human verification.
-The model updates on **every Verify Submit** — not at fixed thresholds.
+makina is a security scanner that continuously self-learns from human review.
+The model updates on **every Review Submit** — not at fixed thresholds.
 Label count is a maturity indicator, not a capability gate.
 
 ### Code organisation: Hexagonal + Vertical Slice
@@ -11,7 +11,7 @@ Label count is a maturity indicator, not a capability gate.
 The Rust core is laid out as **vertical slices over a hexagonal core**:
 
 - **Vertical slice (`features/`)** — one module per user-visible feature
-  (Scan, Verify, Knowledge, Model, plus the supporting `labels` and
+  (Scan, Trace, Audit, Review, Knowledge, Model, plus the supporting `labels` and
   `findings` endpoints). Each slice owns its handler and stays free of
   unrelated concerns; new features land as new directories rather than
   edits to a god `handlers.rs`.
@@ -52,7 +52,7 @@ npm version supports it.
 ```
 ┌─────────────────────────────────────────────────────┐
 │  Browser (SvelteKit)                                │
-│  Scan tab → Graph tab → Audit tab → Verify tab      │
+│  Scan tab → Trace tab → Audit tab → Review tab      │
 │  Knowledge tab → Model tab                          │
 └────────────────────┬────────────────────────────────┘
                      │ HTTP
@@ -66,7 +66,7 @@ npm version supports it.
 │  - /api/retrain       (POST — proxy to ML /train)   │
 │  - /api/stats                                       │
 │  SQLite  ~/.makina/feedback.db  (ML training data)    │
-│  SQLite  ~/.makina/verify.db    (pending queue)       │
+│  SQLite  ~/.makina/verify.db    (review queue)       │
 │  SQLite  ~/.makina/knowledge.db (verified cases)      │
 └──────────┬──────────────────────────────────────────┘
            │ HTTP (internal)
@@ -167,7 +167,7 @@ For each scan request, four detectors run in parallel and are merged:
 Merge deduplicates near-overlapping findings by CWE/rule. When two
 detectors report the same issue with the same severity, the richer
 evidence source wins (`taint` path before `semgrep`, then structural
-property checks, then semantic ML) so the Verify/LLM handoff keeps the
+property checks, then semantic ML) so the Review/LLM handoff keeps the
 most actionable context instead of the noisiest duplicate.
 
 Property-pattern checks are intentionally language-neutral where possible.
@@ -213,7 +213,7 @@ to keep report prose strict. It also gives future fuzzing, symbolic, RL, or
 trace-collection engines a stable place to attach runtime evidence without
 changing the core `Finding` identity.
 
-The Graph tab consumes `trace_graph` directly. It is a reader of scanner
+The Trace tab consumes `trace_graph` directly. It is a reader of scanner
 evidence, not a second detector: if a finding has no trace graph, the tab
 does not invent source-to-sink evidence. The tab merges every finding's
 trace graph into one case-level call graph, so users can inspect the full
@@ -246,13 +246,14 @@ Audit can validate them.
 ## LLM Audit Workflow
 
 The Scan tab can hand the current scan result to the Audit tab instead
-of immediately submitting it to Verify. This creates an in-memory
+of immediately submitting it to Review. This creates an in-memory
 `AuditCase` containing the scan id, language, code, findings, and
 timestamp. Audit does not mutate the learning corpus and does not trigger
 model retraining.
 
-For human labeling, Scan sends individual findings to the Verify queue.
-Those queued cases remain unlabeled until the Verify tab records TP/FP
+For human labeling, Scan sends individual findings to the Review queue
+(`POST /api/verify/queue`).
+Those queued cases remain unlabeled until the Review tab records TP/FP
 state and submits them to Knowledge.
 
 The Audit tab only collects provider settings (`openai` or `anthropic`),
@@ -371,11 +372,11 @@ The `refined_by` field on each finding records which path was taken.
 ```
 Scan → findings stored with CodeBERT embedding vectors (dev/private mode)
   ↓
-Scan can enqueue review cases into Verify (no TP/FP label is written here)
+Scan can enqueue cases into Review (no TP/FP label is written here)
   ↓
-Human reviews in Verify tab (TP / FP labels)
+Human reviews in Review tab (TP / FP labels)
   ↓
-Verify Submit → POST /api/knowledge {case_no, labels}
+Review Submit → POST /api/knowledge {case_no, labels}
   ↓
 Rust core: saves labels to feedback.db, moves case to knowledge.db
   ↓
@@ -395,15 +396,15 @@ pattern index is invalidated (`analyzer.reset_index()`) so the next scan
 picks up any newly added CWE categories.
 
 The Scan UI never calls the low-level feedback endpoint to finalize a
-TP/FP decision. It can only queue findings for Verify; training labels are
-materialized by `POST /api/knowledge` when the user submits the Verify case.
+TP/FP decision. It can only queue findings for Review; training labels are
+materialized by `POST /api/knowledge` when the user submits the Review case.
 
 The current label remains on `findings.label` for fast reads, while every
 human label mutation appends a row to `label_events`. The trainer reads the
 `training_examples` view, which exposes only rows with a valid TP/FP label
 and a non-null 768-dimensional embedding. This keeps future non-training
 states such as closed or needs-review cases out of the GBDT without changing
-the public Verify workflow.
+the public Review workflow.
 
 Each successful retrain writes a deterministic `dataset_hash`, short
 `run_id`, split metadata, sample-weighting mode, skipped-vector count, and
@@ -484,7 +485,7 @@ Quality filters applied during conversion:
   "looks like a fix from anywhere = not vulnerable" rather than just
   "looks like the paired fix".
 
-`bulk_import.py` plays each record back as a Verify Submit:
+`bulk_import.py` plays each record back as a Review Submit:
 
 1. For every range, `POST /api/findings/manual` with the full method as
    `code` and the range as `(line_start, line_end)`. The backend embeds
@@ -517,7 +518,7 @@ supplementary signal path.
 
 ### Offline trainer (prod model bake)
 
-`ml/scripts/train_offline.py` mirrors the Verify-Submit codepath but
+`ml/scripts/train_offline.py` mirrors the Review-Submit codepath but
 skips the HTTP API and SQLite entirely:
 
 ```
@@ -654,7 +655,7 @@ makina/
 │       │   ├── scan/        POST /api/scan and /api/scan/project
 │       │   ├── labels/      POST /api/feedback — low-level TP/FP label endpoint
 │       │   ├── findings/    POST /api/findings/manual — bulk_import seed
-│       │   ├── verify/      GET/POST/DELETE /api/verify/queue
+│       │   ├── verify/      GET/POST/DELETE /api/verify/queue — Review queue
 │       │   ├── knowledge/   GET/POST /api/knowledge
 │       │   └── model/       /api/stats, /api/retrain, /api/model_metrics
 │       ├── infra/           outbound adapters
@@ -682,7 +683,7 @@ makina/
 │   └── src/
 │       ├── routes/        +page.svelte (main layout + state), +layout.ts
 │       └── lib/
-│           ├── components/ CodeEditor, FileTree, FindingCard, AuditTab, VerifyTab, KnowledgeTab …
+│           ├── components/ CodeEditor, FileTree, FindingCard, AuditTab, ReviewTab, KnowledgeTab …
 │           ├── audit.ts   Audit run client (Rust /api/audit/run boundary)
 │           ├── auditReport.ts shared MAKINA report section splitting / ID mapping
 │           ├── highlighter.ts  shiki singleton (vitesse-dark theme)

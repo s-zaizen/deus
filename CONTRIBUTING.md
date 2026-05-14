@@ -71,8 +71,8 @@ training filters, or metrics fields, update Rust store tests and Python
 training tests together.
 
 The frontend Scan tab must not finalize TP/FP labels directly. Scan can
-enqueue a finding into Verify with `POST /api/verify/queue`, but the label
-becomes training data only after the Verify tab submits `POST /api/knowledge`.
+enqueue a finding into Review with `POST /api/verify/queue`, but the label
+becomes training data only after the Review tab submits `POST /api/knowledge`.
 
 Scanner detector changes must preserve the language-agnostic pipeline
 shape: semgrep, CodeBERT semantic analysis, taint analysis, and structural
@@ -146,7 +146,7 @@ docker compose exec ml rm -f \
   /root/.makina/model.json /root/.makina/metrics.json
 docker compose restart backend ml
 
-# 4. Bulk-import. Each case becomes a verify-queue entry with the full
+# 4. Bulk-import. Each case becomes a Review queue entry with the full
 #    method as `code` and one manual finding per range; findings carry
 #    the per-record TP/FP label and the case's CVE id is sent as
 #    `group_key` so the GBDT trainer's GroupShuffleSplit keeps every
@@ -205,7 +205,7 @@ docker cp makina-ml-1:/tmp/model.json models/v1.0.9/model.json
 docker cp makina-ml-1:/tmp/metrics.json models/v1.0.9/metrics.json
 
 # 3. Build the Knowledge-tab showcase DB. Public deployments disable
-#    the live Verify Submit path, so the runtime knowledge.db would
+#    the live Review Submit path, so the runtime knowledge.db would
 #    otherwise be empty. seed_knowledge.py converts the same
 #    samples.jsonl we trained on into a populated SQLite, baked into
 #    the image alongside model.json.
@@ -237,7 +237,7 @@ running a separate object-store hop on every revision boot.
 crates/makina/src/   Rust core — hexagonal + vertical-slice
   api/               router composition + shared API DTOs
   features/          one module per feature (scan, labels, findings,
-                     verify, knowledge, model)
+                     review queue via verify module, knowledge, model)
   infra/ml.rs        outbound adapter for the Python ML service
   store/             SQLite data layer
   logging.rs         tracing + request_id middleware
@@ -248,7 +248,7 @@ ml/makina_ml/        Python ML service (FastAPI)
                      domain modules (CodeBERT, taint, structural patterns, call graph, features)
 frontend/src/        SvelteKit UI (Svelte 5 Runes)
   routes/            +page.svelte (state + layout coordinator)
-  lib/components/    Scan / Graph / Audit / Verify / Knowledge / Model tab components
+  lib/components/    Scan / Trace / Audit / Review / Knowledge / Model tab components
   lib/audit.ts       Audit run client over /api/audit/run
   lib/auditReport.ts Shared MAKINA report section splitting / ID mapping
   lib/api.ts         fetch wrappers (PUBLIC_API_URL)
@@ -266,7 +266,7 @@ docs/                Architecture and design documentation
   settings.json      Hook configuration
 AGENTS.md            Codex instructions for this repo
 .codex/              Codex configuration and playbooks
-  commands/          Vulnerability queue / verification workflows
+  commands/          Vulnerability queue / review workflows
   checks/            Explicit post-edit check helpers
   hooks/             Git pre-push hook for the full suite
   rules/             Path-scoped lint/style rules (backend, ml, frontend)
@@ -291,7 +291,7 @@ Public mode strips every learning-loop write: `/api/feedback`,
 `POST /api/knowledge`, `/api/retrain`, and the Python `/train`. It also
 strips hosted Audit execution (`POST /api/audit/run`) so public users
 cannot accidentally send OpenAI or Anthropic API keys to the makina.sh
-backend. The frontend must show disabled-state notices for Verify and
+backend. The frontend must show disabled-state notices for Review and
 Audit when `PUBLIC_MAKINA_PUBLIC_MODE` is enabled. `/api/scan` and
 `/api/scan/project` remain available and still apply the baked model, but
 they skip writing unlabeled findings into `feedback.db`.
@@ -338,14 +338,14 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 | `.claude`    | Claude Code slash commands |
 | `.codex`     | Codex instructions, rules, and playbooks |
 | `api`        | HTTP API contract changes  |
-| `verify`     | Verify queue / labeling    |
+| `review`     | Review queue / labeling    |
 | `scan`       | Scan pipeline              |
 | `learning`   | ML training / GBDT         |
 
 **Examples:**
 
 ```
-feat(verify): add persistent queue with SQLite backend
+feat(review): add persistent queue with SQLite backend
 fix(ml): handle single-class training gracefully
 perf(scan): run semgrep, CodeBERT, and taint in parallel
 chore: add Dockerfile multi-stage build

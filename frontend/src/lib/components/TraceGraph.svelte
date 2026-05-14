@@ -619,7 +619,7 @@
 {#if variant === 'compact'}
 	<div class="overflow-hidden rounded border border-[var(--mk-border)] bg-[var(--mk-bg-panel)]">
 		<div class="flex items-center justify-between border-b border-[var(--mk-border)] bg-[var(--mk-bg-elevated)] px-3 py-1.5">
-			<span class="text-[11px] font-semibold tracking-wide text-[var(--mk-text-soft)]">Trace Graph</span>
+			<span class="text-[11px] font-semibold tracking-wide text-[var(--mk-text-soft)]">Trace</span>
 			<span class="font-mono text-[10px] text-[var(--mk-text-muted)]">{nodes.length} nodes / {edgeCount} edges</span>
 		</div>
 		<div class="flex items-stretch gap-2 overflow-x-auto px-3 py-3">

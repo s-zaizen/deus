@@ -2,7 +2,7 @@
 	import { highlightSnippet } from '$lib/highlighter';
 	import { PUBLIC_MODE } from '$lib/flags';
 	import { severityTone } from '$lib/theme';
-	import type { Label, VerifyCase } from '$lib/types';
+	import type { Label, ReviewCase } from '$lib/types';
 
 	let {
 		cases,
@@ -10,7 +10,7 @@
 		onsubmit,
 		onclose
 	}: {
-		cases: VerifyCase[];
+		cases: ReviewCase[];
 		onlabel: (caseNo: number, findingId: string, label: Label) => void;
 		onsubmit: (caseNo: number) => Promise<void>;
 		onclose: (caseNo: number) => Promise<void>;
@@ -68,7 +68,7 @@
 	// Highlighted code cache: keyed by findingId. Populated lazily on expand.
 	let codeCache = $state<Record<string, string>>({});
 
-	function highlightCase(vc: VerifyCase) {
+	function highlightCase(vc: ReviewCase) {
 		for (const f of vc.findings) {
 			if (!f.code_snippet || codeCache[f.id] !== undefined) continue;
 			codeCache[f.id] = ''; // sentinel: in-progress
@@ -83,7 +83,7 @@
 		return expandedCases[caseNo] === true;
 	}
 
-	function toggleExpand(vc: VerifyCase) {
+	function toggleExpand(vc: ReviewCase) {
 		const next = !isExpanded(vc.caseNo);
 		expandedCases[vc.caseNo] = next;
 		if (next) highlightCase(vc);
@@ -118,7 +118,7 @@
 						d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z" />
 				</svg>
 			</div>
-			<p class="text-sm font-semibold text-gray-300">Verify is disabled in public demo mode</p>
+			<p class="text-sm font-semibold text-gray-300">Review is disabled in public demo mode</p>
 			<p class="mt-2 text-sm leading-relaxed text-gray-500">
 				makina.sh runs a frozen read-only model. TP/FP labels, case closing, and Knowledge submission are disabled so public traffic cannot modify training data.
 			</p>
@@ -180,7 +180,7 @@
 				{#if filteredCases.length !== cases.length}
 					{filteredCases.length} of {cases.length} case{cases.length !== 1 ? 's' : ''} shown
 				{:else}
-					{cases.length} case{cases.length !== 1 ? 's' : ''} pending verification
+					{cases.length} case{cases.length !== 1 ? 's' : ''} pending review
 				{/if}
 			</p>
 
@@ -344,7 +344,7 @@
 												: 'bg-violet-600 hover:bg-violet-500 text-white cursor-pointer'
 										].join(' ')}
 									>
-										{submitting ? 'Submitting…' : 'Submit to Knowledge'}
+										{submitting ? 'Submitting…' : 'Submit Review'}
 									</button>
 								</div>
 							</div>

@@ -153,7 +153,7 @@
 					</div>
 				{/if}
 
-				<p class="mt-2 text-xs italic text-gray-700">Retrains on every Verify Submit</p>
+				<p class="mt-2 text-xs italic text-gray-700">Retrains on every Review Submit</p>
 			</section>
 
 			<!-- Accumulated Labels -->
@@ -191,7 +191,7 @@
 					</div>
 				{:else}
 					<p class="py-1 text-center text-xs text-gray-700">
-						No labels yet — verify cases to accumulate knowledge.
+						No labels yet — review cases to accumulate knowledge.
 					</p>
 				{/if}
 			</section>
