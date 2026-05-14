@@ -40,6 +40,12 @@ Frontend test tooling stays on Vitest 3.x with Vite 6.x, and
 clean without changing the SvelteKit major line. Monaco is loaded from
 the narrow `editor.api` ESM entry and split with Vite manual chunks so
 the editor stays lazy-loaded instead of becoming one oversized bundle.
+Dependency freshness is treated as a supply-chain control: `renovate.json`
+requires a 90-day minimum release age before automated dependency update
+branches or PRs, disables lockfile-only maintenance churn, and requires
+timestamp metadata for the age check. npm workspaces include `.npmrc` with
+`min-release-age=90` as a local install/build backstop where the active
+npm version supports it.
 
 ## System Components
 

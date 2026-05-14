@@ -1,0 +1,12 @@
+{
+	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
+	"extends": ["config:recommended"],
+	"dependencyDashboard": true,
+	"prCreation": "not-pending",
+	"minimumReleaseAge": "90 days",
+	"minimumReleaseAgeBehaviour": "timestamp-required",
+	"internalChecksFilter": "strict",
+	"lockFileMaintenance": {
+		"enabled": false
+	}
+}

@@ -28,6 +28,19 @@ cd frontend
 npm audit --audit-level=low
 ```
 
+Dependency update hygiene:
+
+- Automated dependency update PRs are governed by `renovate.json` and
+  should wait until a release is at least 90 days old before branches or
+  PRs are created. Release timestamps are required; packages without
+  usable release-age metadata should be handled manually.
+- npm workspaces also carry `.npmrc` with `min-release-age=90` so
+  npm versions that support release-age quarantine avoid resolving
+  newly published packages during local installs and Docker builds.
+- Manual dependency bumps should follow the same 90-day quarantine unless
+  the change is an explicit security fix, a broken-build unblock, or a
+  user-approved exception. Document exceptions in the PR or commit.
+
 The frontend keeps Vitest on 3.x so test tooling reuses the root Vite
 6.x line instead of pulling an older nested Vite. `package.json` also
 overrides SvelteKit's transitive `cookie` dependency to `0.7.2` because
