@@ -14,9 +14,9 @@
 	import {
 		scanCode,
 		scanProject,
-		submitFeedback,
 		getStats,
 		getVerifyQueue,
+		addToVerifyQueue,
 		closeVerifyCase,
 		getKnowledgeHistory,
 		submitToKnowledge
@@ -521,9 +521,40 @@
 		scanProgress = null;
 	}
 
-	async function handleFindingLabel(id: string, label: Label) {
-		await submitFeedback(id, label);
-		await refreshStats();
+	function isFindingQueuedForVerify(id: string) {
+		return verifyCases.some((verifyCase) =>
+			verifyCase.findings.some((finding) => finding.id === id)
+		);
+	}
+
+	async function handleFindingVerify(id: string) {
+		if (PUBLIC_MODE) return;
+		if (isFindingQueuedForVerify(id)) {
+			activeTab = 'verify';
+			return;
+		}
+
+		const sourceFile = findingSourceFile(id);
+		const finding =
+			(sourceFile ? scannedFindingsByPath.get(sourceFile.path)?.find((candidate) => candidate.id === id) : null)
+			?? findings.find((candidate) => candidate.id === id);
+		if (!finding) return;
+
+		try {
+			const verifyCase = await addToVerifyQueue(
+				null,
+				sourceFile?.content ?? code,
+				sourceFile?.language ?? language,
+				[finding]
+			);
+			verifyCases = [verifyCase, ...verifyCases];
+			focusedFindingId = id;
+			focusedLineOverride = null;
+			activeTab = 'verify';
+			error = null;
+		} catch {
+			error = 'Cannot send this finding to Verify. Run: docker compose up -d --build backend';
+		}
 	}
 
 	function handleFindingClose(id: string) {
@@ -769,9 +800,10 @@
 					{resultsStale}
 					{language}
 					{focusedFindingId}
-					onlabel={handleFindingLabel}
+					onverify={handleFindingVerify}
 					onclose={handleFindingClose}
 					onfocus={handleFocusFinding}
+					isQueuedForVerify={isFindingQueuedForVerify}
 				/>
 			</div>
 
@@ -804,9 +836,10 @@
 					{resultsStale}
 					{language}
 					{focusedFindingId}
-					onlabel={handleFindingLabel}
+					onverify={handleFindingVerify}
 					onclose={handleFindingClose}
 					onfocus={handleFocusFinding}
+					isQueuedForVerify={isFindingQueuedForVerify}
 				/>
 			</div>
 		</div>

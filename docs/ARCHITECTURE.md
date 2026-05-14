@@ -251,6 +251,10 @@ of immediately submitting it to Verify. This creates an in-memory
 timestamp. Audit does not mutate the learning corpus and does not trigger
 model retraining.
 
+For human labeling, Scan sends individual findings to the Verify queue.
+Those queued cases remain unlabeled until the Verify tab records TP/FP
+state and submits them to Knowledge.
+
 The Audit tab only collects provider settings (`openai` or `anthropic`),
 model, max output tokens, and API key, then calls `POST /api/audit/run`.
 The Rust core owns the fixed audit workflow and prompt assembly. It runs
@@ -367,6 +371,8 @@ The `refined_by` field on each finding records which path was taken.
 ```
 Scan → findings stored with CodeBERT embedding vectors (dev/private mode)
   ↓
+Scan can enqueue review cases into Verify (no TP/FP label is written here)
+  ↓
 Human reviews in Verify tab (TP / FP labels)
   ↓
 Verify Submit → POST /api/knowledge {case_no, labels}
@@ -387,6 +393,10 @@ This is intentional: with small datasets full retraining is cheap (<1s)
 and avoids incremental drift. After each retrain the analyzer's in-memory
 pattern index is invalidated (`analyzer.reset_index()`) so the next scan
 picks up any newly added CWE categories.
+
+The Scan UI never calls the low-level feedback endpoint to finalize a
+TP/FP decision. It can only queue findings for Verify; training labels are
+materialized by `POST /api/knowledge` when the user submits the Verify case.
 
 The current label remains on `findings.label` for fast reads, while every
 human label mutation appends a row to `label_events`. The trainer reads the
@@ -642,7 +652,7 @@ makina/
 │       │   └── models.rs    request/response types (Finding, Scan*, …)
 │       ├── features/        one module per user-visible feature
 │       │   ├── scan/        POST /api/scan and /api/scan/project
-│       │   ├── labels/      POST /api/feedback — TP/FP toggle on a finding
+│       │   ├── labels/      POST /api/feedback — low-level TP/FP label endpoint
 │       │   ├── findings/    POST /api/findings/manual — bulk_import seed
 │       │   ├── verify/      GET/POST/DELETE /api/verify/queue
 │       │   ├── knowledge/   GET/POST /api/knowledge

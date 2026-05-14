@@ -70,6 +70,10 @@ retrain with its dataset hash and metrics JSON. If you change label states,
 training filters, or metrics fields, update Rust store tests and Python
 training tests together.
 
+The frontend Scan tab must not finalize TP/FP labels directly. Scan can
+enqueue a finding into Verify with `POST /api/verify/queue`, but the label
+becomes training data only after the Verify tab submits `POST /api/knowledge`.
+
 Scanner detector changes must preserve the language-agnostic pipeline
 shape: semgrep, CodeBERT semantic analysis, taint analysis, and structural
 property-pattern checks all contribute evidence before Rust merges and
