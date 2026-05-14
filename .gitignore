@@ -58,5 +58,5 @@ bulk_import_logs/
 
 # Screenshots
 *.png
-!docs/demo.png
-!docs/demo-audit.png
+!docs/demo/
+!docs/demo/*.png
