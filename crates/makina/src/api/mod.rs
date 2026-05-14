@@ -26,6 +26,7 @@ pub fn build_router(flags: Flags) -> Router {
     // Read-only routes — always exposed.
     let mut app = Router::new()
         .route("/api/scan", post(scan::scan))
+        .route("/api/scan/project", post(scan::scan_project))
         .route("/api/stats", get(model::stats))
         .route("/api/verify/queue", get(verify::list))
         .route("/api/knowledge", get(knowledge::list))

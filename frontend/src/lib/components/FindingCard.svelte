@@ -8,20 +8,24 @@
 		finding,
 		language,
 		onlabel,
+		onverify,
 		onclose,
 		onfocus,
 		focused = false,
 		readonly = false,
-		existingLabel = null
+		existingLabel = null,
+		queuedForVerify = false
 	}: {
 		finding: Finding;
 		language: Language;
 		onlabel?: (id: string, label: Label) => Promise<void>;
+		onverify?: (id: string) => Promise<void> | void;
 		onclose?: (id: string) => Promise<void> | void;
 		onfocus?: () => void;
 		focused?: boolean;
 		readonly?: boolean;
 		existingLabel?: Label | null;
+		queuedForVerify?: boolean;
 	} = $props();
 
 	let interactiveLabel = $state<Label | null>(null);
@@ -65,6 +69,17 @@
 		try {
 			await onlabel(finding.id, label);
 			interactiveLabel = label;
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function handleVerify(e: MouseEvent) {
+		e.stopPropagation();
+		if (!onverify || queuedForVerify) return;
+		loading = true;
+		try {
+			await onverify(finding.id);
 		} finally {
 			loading = false;
 		}
@@ -158,7 +173,7 @@
 		</div>
 	</div>
 
-	<!-- TP / FP buttons or readonly label badge -->
+	<!-- Review actions or readonly label badge -->
 	{#if readonly}
 		{#if labeled}
 			<div class="flex items-center gap-2 mt-1">
@@ -172,6 +187,35 @@
 				</span>
 			</div>
 		{/if}
+	{:else if !onlabel}
+		<div class="grid grid-cols-1 gap-2 mt-1">
+			{#if onverify}
+				<button
+					onclick={handleVerify}
+					disabled={loading || closing || queuedForVerify}
+					class={[
+						'flex items-center justify-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded border transition-colors',
+						queuedForVerify
+							? 'bg-[var(--mk-border)] border-[var(--mk-border-strong)] text-gray-500 cursor-not-allowed'
+							: 'bg-violet-950/35 border-violet-700 text-violet-200 hover:bg-violet-950/60 cursor-pointer'
+					].join(' ')}
+				>
+					<span>{queuedForVerify ? '✓' : '→'}</span>
+					{queuedForVerify ? 'In Verify' : loading ? 'Sending...' : 'Send to Verify'}
+				</button>
+			{/if}
+
+			{#if onclose}
+				<button
+					onclick={handleClose}
+					disabled={loading || closing}
+					class="flex items-center justify-center gap-1.5 rounded border border-[var(--mk-border-strong)] bg-[var(--mk-bg-elevated)] px-3 py-1.5 text-xs font-medium text-gray-300 transition-colors hover:border-violet-500/50 hover:bg-[var(--mk-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+				>
+					<span>&#8722;</span>
+					{closing ? 'Closing...' : 'Close Case'}
+				</button>
+			{/if}
+		</div>
 	{:else}
 		<div class="grid grid-cols-2 gap-2 mt-1">
 			<button

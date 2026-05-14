@@ -5,6 +5,7 @@
 	import CodeEditor from '$lib/components/CodeEditor.svelte';
 	import FindingsList from '$lib/components/FindingsList.svelte';
 	import FileTree from '$lib/components/FileTree.svelte';
+	import GraphTab from '$lib/components/GraphTab.svelte';
 	import KnowledgeTab from '$lib/components/KnowledgeTab.svelte';
 	import ModelTab from '$lib/components/ModelTab.svelte';
 	import ScanPanel from '$lib/components/ScanPanel.svelte';
@@ -12,9 +13,10 @@
 	import VerifyTab from '$lib/components/VerifyTab.svelte';
 	import {
 		scanCode,
-		submitFeedback,
+		scanProject,
 		getStats,
 		getVerifyQueue,
+		addToVerifyQueue,
 		closeVerifyCase,
 		getKnowledgeHistory,
 		submitToKnowledge
@@ -23,14 +25,15 @@
 	import { readFolder, flatFiles } from '$lib/folder';
 	import { PLACEHOLDERS } from '$lib/placeholders';
 	import { PUBLIC_MODE } from '$lib/flags';
-	import type { AuditCase, Finding, Language, Label, Stats, VerifyCase, KnowledgeCase, FileNode } from '$lib/types';
+	import type { AuditCase, Finding, Language, Label, Stats, VerifyCase, KnowledgeCase, FileNode, TraceGraphNode } from '$lib/types';
 
-	type Tab = 'scan' | 'audit' | 'verify' | 'knowledge' | 'model';
+	type Tab = 'scan' | 'graph' | 'audit' | 'verify' | 'knowledge' | 'model';
 
-	const VISIBLE_TABS: readonly Tab[] = ['scan', 'audit', 'verify', 'knowledge', 'model'] as const;
+	const VISIBLE_TABS: readonly Tab[] = ['scan', 'graph', 'audit', 'verify', 'knowledge', 'model'] as const;
 
 	const TAB_DESCRIPTIONS: Record<Tab, string> = {
 		scan: 'Scan code for vulnerabilities',
+		graph: 'Trace graph workspace',
 		audit: 'Run LLM audit workflow',
 		verify: 'Review and label findings',
 		knowledge: 'Browse verified cases',
@@ -51,6 +54,8 @@
 	let stats = $state<Stats | null>(null);
 	let error = $state<string | null>(null);
 	let focusedFindingId = $state<string | null>(null);
+	let focusedLineOverride = $state<number | null>(null);
+	let focusedLineToken = $state(0);
 
 	let auditCase = $state<AuditCase | null>(null);
 	let verifyCases = $state<VerifyCase[]>([]);
@@ -65,9 +70,17 @@
 	let explorerDragging = $state(false);
 
 	const focusedFinding = $derived(findings.find((f) => f.id === focusedFindingId));
-	const focusedLine = $derived(focusedFinding?.line_start ?? null);
+	const focusedLine = $derived(focusedLineOverride ?? focusedFinding?.line_start ?? null);
 	const currentFilename = $derived(selectedFile?.name);
 	const findingCountText = $derived(`${findings.length} finding${findings.length === 1 ? '' : 's'}`);
+	const graphFindings = $derived.by(() => {
+		if (!folderRoot) return findings;
+		const allFindings: Finding[] = [];
+		for (const file of flatFiles(folderRoot)) {
+			allFindings.push(...(scannedFindingsByPath.get(file.path) ?? []));
+		}
+		return allFindings.length > 0 ? allFindings : findings;
+	});
 	const auditAllFindingCount = $derived(
 		folderRoot
 			? flatFiles(folderRoot).reduce(
@@ -142,6 +155,7 @@
 		code = PLACEHOLDERS[lang];
 		findings = [];
 		focusedFindingId = null;
+		focusedLineOverride = null;
 		scanCompleted = false;
 		resultsStale = false;
 		currentScanId = null;
@@ -153,6 +167,7 @@
 		const hasCurrentFindings = findings.length > 0;
 		code = value;
 		focusedFindingId = null;
+		focusedLineOverride = null;
 		resultsStale = hasCurrentFindings;
 		if (!hasCurrentFindings) scanCompleted = false;
 		currentScanId = hasCurrentFindings ? currentScanId : null;
@@ -166,6 +181,7 @@
 		error = null;
 		findings = [];
 		focusedFindingId = null;
+		focusedLineOverride = null;
 		currentScanId = null;
 		try {
 			const result = await scanCode(code, language);
@@ -295,15 +311,105 @@
 		await refreshStats();
 	}
 
-	function handleFocusFinding(id: string) {
+	function handleSelectFinding(id: string) {
 		focusedFindingId = id;
+		focusedLineOverride = null;
+		focusedLineToken += 1;
+	}
+
+	function handleFocusFinding(id: string) {
+		jumpFindingToCode(id);
+	}
+
+	function findingSourceFile(id: string): FileNode | null {
+		if (!folderRoot) return null;
+		for (const file of flatFiles(folderRoot)) {
+			if ((scannedFindingsByPath.get(file.path) ?? []).some((finding) => finding.id === id)) {
+				return file;
+			}
+		}
+		return null;
+	}
+
+	function traceSourceFile(node: TraceGraphNode): FileNode | null {
+		if (!folderRoot) return null;
+		if (node.file) {
+			const normalized = node.file.replace(/^\.?\//, '');
+			const matched = flatFiles(folderRoot).find((file) =>
+				file.path === normalized || file.path.endsWith(`/${normalized}`) || normalized.endsWith(`/${file.path}`)
+			);
+			if (matched) return matched;
+		}
+		const relatedId = node.meta?.findingId ?? node.meta?.relatedFindingIds?.[0];
+		return relatedId ? findingSourceFile(relatedId) : null;
+	}
+
+	function loadFileForFocus(file: FileNode | null) {
+		if (!file?.content) return;
+		selectedFile = file;
+		code = file.content;
+		language = file.language ?? 'auto';
+		findings = scannedFindingsByPath.get(file.path) ?? [];
+		scanCompleted = scannedPaths.has(file.path);
+		resultsStale = false;
+		currentScanId = scanIdsByPath.get(file.path) ?? null;
+		error = null;
+	}
+
+	function jumpFindingToCode(id: string, lineOverride: number | null = null) {
+		const sourceFile = findingSourceFile(id);
+		if (sourceFile) loadFileForFocus(sourceFile);
+		const targetFinding = (sourceFile ? scannedFindingsByPath.get(sourceFile.path) : findings)?.find(
+			(finding) => finding.id === id
+		);
+		focusedFindingId = id;
+		focusedLineOverride = lineOverride ?? targetFinding?.line_start ?? null;
+		focusedLineToken += 1;
 		activeTab = 'scan';
+	}
+
+	function handleJumpTraceNode(node: TraceGraphNode) {
+		const sourceFile = traceSourceFile(node);
+		if (sourceFile) loadFileForFocus(sourceFile);
+
+		const findingId = node.meta?.findingId ?? node.meta?.relatedFindingIds?.[0] ?? null;
+		const targetFinding = findingId
+			? (sourceFile ? scannedFindingsByPath.get(sourceFile.path) : findings)?.find((finding) => finding.id === findingId)
+			: null;
+		const line = node.line_start ?? targetFinding?.line_start ?? null;
+
+		focusedFindingId = targetFinding?.id ?? null;
+		focusedLineOverride = line;
+		focusedLineToken += 1;
+		activeTab = 'scan';
+	}
+
+	function handleAuditFinding(id: string) {
+		const sourceFile = findingSourceFile(id);
+		const finding =
+			(sourceFile ? scannedFindingsByPath.get(sourceFile.path)?.find((candidate) => candidate.id === id) : null)
+			?? findings.find((candidate) => candidate.id === id);
+		if (!finding) return;
+
+		auditCase = {
+			id: crypto.randomUUID(),
+			scanId: sourceFile ? (scanIdsByPath.get(sourceFile.path) ?? currentScanId) : currentScanId,
+			code: sourceFile?.content ?? code,
+			language: sourceFile?.language ?? language,
+			findings: [finding],
+			createdAt: new Date().toISOString()
+		};
+		focusedFindingId = id;
+		focusedLineOverride = null;
+		activeTab = 'audit';
 	}
 
 	async function handleFolderDrop(item: DataTransferItem) {
 		const root = await readFolder(item);
 		if (!root) return;
 		folderRoot = root;
+		focusedFindingId = null;
+		focusedLineOverride = null;
 		scannedPaths.clear();
 		scannedFindingsByPath.clear();
 		scanIdsByPath.clear();
@@ -352,6 +458,7 @@
 		language = node.language ?? 'auto';
 		findings = scannedFindingsByPath.get(node.path) ?? [];
 		focusedFindingId = null;
+		focusedLineOverride = null;
 		scanCompleted = scannedPaths.has(node.path);
 		resultsStale = false;
 		currentScanId = scanIdsByPath.get(node.path) ?? null;
@@ -366,6 +473,7 @@
 		scanCompleted = false;
 		resultsStale = false;
 		focusedFindingId = null;
+		focusedLineOverride = null;
 		currentScanId = null;
 		scannedPaths.clear();
 		scannedFindingsByPath.clear();
@@ -373,26 +481,29 @@
 		if (selectedFile) findings = [];
 		scanProgress = { current: 0, total: files.length };
 		try {
-			for (let i = 0; i < files.length; i++) {
-				const f = files[i];
-				if (!f.content) continue;
-				const fileLanguage = f.language ?? 'auto';
-				try {
-					const result = await scanCode(f.content, fileLanguage);
-					scannedFindingsByPath.set(f.path, result.findings);
-					scanIdsByPath.set(f.path, result.scan_id);
-					scannedPaths.add(f.path);
-					if (selectedFile?.path === f.path) {
-						findings = result.findings;
-						currentScanId = result.scan_id;
-						scanCompleted = true;
-					}
-				} catch { /* continue */ }
-				scanProgress = { current: i + 1, total: files.length };
+			const result = await scanProject(
+				files.map((file) => ({
+					path: file.path,
+					code: file.content ?? '',
+					language: file.language
+				}))
+			);
+			for (const fileResult of result.files) {
+				scannedFindingsByPath.set(fileResult.path, fileResult.findings);
+				scanIdsByPath.set(fileResult.path, fileResult.scan_id);
+				scannedPaths.add(fileResult.path);
+				if (selectedFile?.path === fileResult.path) {
+					findings = fileResult.findings;
+					currentScanId = fileResult.scan_id;
+					scanCompleted = true;
+				}
 			}
+			scanProgress = { current: files.length, total: files.length };
 			if (selectedFile && scannedPaths.has(selectedFile.path)) {
 				scanCompleted = true;
 			}
+		} catch {
+			error = 'Cannot connect to makina server. Run: docker compose up -d --build backend';
 		} finally {
 			scanning = false;
 			scanProgress = null;
@@ -402,15 +513,48 @@
 	function handleClearFolder() {
 		folderRoot = null;
 		selectedFile = null;
+		focusedFindingId = null;
+		focusedLineOverride = null;
 		scannedPaths.clear();
 		scannedFindingsByPath.clear();
 		scanIdsByPath.clear();
 		scanProgress = null;
 	}
 
-	async function handleFindingLabel(id: string, label: Label) {
-		await submitFeedback(id, label);
-		await refreshStats();
+	function isFindingQueuedForVerify(id: string) {
+		return verifyCases.some((verifyCase) =>
+			verifyCase.findings.some((finding) => finding.id === id)
+		);
+	}
+
+	async function handleFindingVerify(id: string) {
+		if (PUBLIC_MODE) return;
+		if (isFindingQueuedForVerify(id)) {
+			activeTab = 'verify';
+			return;
+		}
+
+		const sourceFile = findingSourceFile(id);
+		const finding =
+			(sourceFile ? scannedFindingsByPath.get(sourceFile.path)?.find((candidate) => candidate.id === id) : null)
+			?? findings.find((candidate) => candidate.id === id);
+		if (!finding) return;
+
+		try {
+			const verifyCase = await addToVerifyQueue(
+				null,
+				sourceFile?.content ?? code,
+				sourceFile?.language ?? language,
+				[finding]
+			);
+			verifyCases = [verifyCase, ...verifyCases];
+			focusedFindingId = id;
+			focusedLineOverride = null;
+			activeTab = 'verify';
+			error = null;
+		} catch {
+			error = 'Cannot send this finding to Verify. Run: docker compose up -d --build backend';
+		}
 	}
 
 	function handleFindingClose(id: string) {
@@ -418,11 +562,15 @@
 		if (selectedFile?.path) {
 			scannedFindingsByPath.set(selectedFile.path, findings);
 		}
-		if (focusedFindingId === id) focusedFindingId = null;
+		if (focusedFindingId === id) {
+			focusedFindingId = null;
+			focusedLineOverride = null;
+			focusedLineToken += 1;
+		}
 	}
 </script>
 
-<div class="mk-app-bg relative flex h-screen overflow-hidden text-[var(--mk-text)]">
+<div class="mk-app-bg relative flex h-screen w-screen overflow-hidden text-[var(--mk-text)]">
 
 	<!-- Left rail: icon-only vertical tabs -->
 	<aside class="mk-rail relative z-10 flex h-full w-16 shrink-0 flex-col border-r">
@@ -451,6 +599,10 @@
 						{#if tab === 'scan'}
 							<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
 								<path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+							</svg>
+						{:else if tab === 'graph'}
+							<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
+								<path stroke-linecap="round" stroke-linejoin="round" d="M7.5 14.25v2.25m3-4.5v4.5m3-6.75v6.75m3-9v9M6 20.25h12A2.25 2.25 0 0020.25 18V6A2.25 2.25 0 0018 3.75H6A2.25 2.25 0 003.75 6v12A2.25 2.25 0 006 20.25z" />
 							</svg>
 						{:else if tab === 'audit'}
 							<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8">
@@ -620,6 +772,7 @@
 					{language}
 					{findings}
 					{focusedLine}
+					focusToken={focusedLineToken}
 					onFolderDrop={folderRoot ? undefined : handleFolderDrop}
 					filename={currentFilename}
 				/>
@@ -647,9 +800,10 @@
 					{resultsStale}
 					{language}
 					{focusedFindingId}
-					onlabel={handleFindingLabel}
+					onverify={handleFindingVerify}
 					onclose={handleFindingClose}
 					onfocus={handleFocusFinding}
+					isQueuedForVerify={isFindingQueuedForVerify}
 				/>
 			</div>
 
@@ -663,7 +817,7 @@
 							{findingCountText}
 						</span>
 						<button
-							onclick={() => { findings = []; scanCompleted = false; resultsStale = false; currentScanId = null; error = null; focusedFindingId = null; }}
+							onclick={() => { findings = []; scanCompleted = false; resultsStale = false; currentScanId = null; error = null; focusedFindingId = null; focusedLineOverride = null; focusedLineToken += 1; }}
 							class="p-1 rounded text-gray-600 hover:text-[var(--mk-text-soft)] hover:bg-[var(--mk-bg-elevated)] cursor-pointer"
 							aria-label="Clear findings"
 							title="Clear findings"
@@ -682,22 +836,39 @@
 					{resultsStale}
 					{language}
 					{focusedFindingId}
-					onlabel={handleFindingLabel}
+					onverify={handleFindingVerify}
 					onclose={handleFindingClose}
 					onfocus={handleFocusFinding}
+					isQueuedForVerify={isFindingQueuedForVerify}
 				/>
 			</div>
 		</div>
-	{#if activeTab === 'verify'}
-		<div class="flex flex-1 min-h-0" style:display={activeTab === 'verify' ? 'flex' : 'none'} aria-hidden={activeTab !== 'verify'}>
-			<VerifyTab
-				cases={verifyCases}
-				onlabel={handleCaseLabel}
-				onsubmit={handleCaseSubmit}
-				onclose={handleCaseClose}
-			/>
-		</div>
-	{/if}
+		{#if activeTab === 'graph'}
+			<div class="flex w-full flex-1 min-h-0" style:display={activeTab === 'graph' ? 'flex' : 'none'} aria-hidden={activeTab !== 'graph'}>
+				<GraphTab
+					findings={graphFindings}
+					{focusedFindingId}
+					onselect={handleSelectFinding}
+					onjump={handleJumpTraceNode}
+					onaudit={handleAuditFinding}
+					onreset={() => {
+						focusedFindingId = null;
+						focusedLineOverride = null;
+						focusedLineToken += 1;
+					}}
+				/>
+			</div>
+		{/if}
+		{#if activeTab === 'verify'}
+			<div class="flex flex-1 min-h-0" style:display={activeTab === 'verify' ? 'flex' : 'none'} aria-hidden={activeTab !== 'verify'}>
+				<VerifyTab
+					cases={verifyCases}
+					onlabel={handleCaseLabel}
+					onsubmit={handleCaseSubmit}
+					onclose={handleCaseClose}
+				/>
+			</div>
+		{/if}
 		<div
 			class="flex flex-1 min-h-0"
 			style:display={activeTab === 'audit' ? 'flex' : 'none'}

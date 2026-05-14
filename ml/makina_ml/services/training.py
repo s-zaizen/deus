@@ -5,11 +5,13 @@ delegate → return) and the actual training pipeline (read labels →
 group-aware split → fit → eval → persist → reset analyzer cache) has
 one home that's easy to test and reason about.
 
-The pipeline preserves bit-for-bit behaviour:
+The pipeline preserves the route-level training contract:
   * group_key column is read NULL-tolerantly (older DBs lack it)
   * `GroupShuffleSplit` is used when ≥ 2 distinct CVE groups are
     present; otherwise a stratified 80/20 split is used; otherwise
     the full dataset is used (no held-out validation)
+  * class-balanced sample weights are tempered by group frequency so
+    one CVE/import batch cannot dominate the loss
   * after eval the model is refit on the *full* dataset so the
     production artifact uses every label
   * metrics are persisted to `MAKINA_METRICS` (default
@@ -24,11 +26,13 @@ import logging
 import sqlite3
 import time
 from datetime import datetime, timezone
+from hashlib import sha256
 from pathlib import Path
 
 import numpy as np
 
 logger = logging.getLogger("makina_ml")
+GROUP_WEIGHT_EXPONENT = 0.2
 
 
 def model_stage(total: int) -> str:
@@ -43,10 +47,65 @@ def model_stage(total: int) -> str:
     return "mature"
 
 
-def _has_group_column(conn: sqlite3.Connection) -> bool:
+def _has_relation(conn: sqlite3.Connection, name: str) -> bool:
     return (
         conn.execute(
-            "SELECT 1 FROM pragma_table_info('findings') WHERE name='group_key'"
+            "SELECT 1 FROM sqlite_master WHERE name = ? AND type IN ('table','view')",
+            (name,),
+        ).fetchone()
+        is not None
+    )
+
+
+def _has_column(conn: sqlite3.Connection, relation: str, column: str) -> bool:
+    return (
+        conn.execute(
+            f"SELECT 1 FROM pragma_table_info('{relation}') WHERE name = ?",
+            (column,),
+        ).fetchone()
+        is not None
+    )
+
+
+def _has_group_column(conn: sqlite3.Connection) -> bool:
+    return _has_column(conn, "findings", "group_key")
+
+
+def _ensure_training_metadata(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS training_runs (
+            run_id TEXT PRIMARY KEY,
+            trained_at TEXT NOT NULL,
+            samples INTEGER NOT NULL,
+            tp INTEGER NOT NULL,
+            fp INTEGER NOT NULL,
+            dataset_hash TEXT,
+            split TEXT,
+            model_path TEXT,
+            metrics_json TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+        """
+    )
+    if _has_group_column(conn):
+        conn.execute(
+            """
+            CREATE VIEW IF NOT EXISTS training_examples AS
+                SELECT id, code_hash, feature_vector, rule_id, language,
+                       line_number, confidence, label, labeled_at, created_at,
+                       group_key
+                FROM findings
+                WHERE label IN ('tp','fp') AND feature_vector IS NOT NULL
+            """
+        )
+    conn.commit()
+
+
+def _has_group_column_for_relation(conn: sqlite3.Connection, relation: str) -> bool:
+    return (
+        conn.execute(
+            f"SELECT 1 FROM pragma_table_info('{relation}') WHERE name='group_key'"
         ).fetchone()
         is not None
     )
@@ -56,15 +115,24 @@ def _load_dataset(db_path: Path) -> list[tuple[bytes, str, str | None]]:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
-        if _has_group_column(conn):
+        _ensure_training_metadata(conn)
+        relation = (
+            "training_examples"
+            if _has_relation(conn, "training_examples")
+            else "findings"
+        )
+        order_by = "id" if _has_column(conn, relation, "id") else "rowid"
+        if _has_group_column_for_relation(conn, relation):
             rows = conn.execute(
-                "SELECT feature_vector, label, group_key FROM findings "
-                "WHERE label IS NOT NULL AND feature_vector IS NOT NULL"
+                f"SELECT feature_vector, label, group_key FROM {relation} "
+                "WHERE label IN ('tp','fp') AND feature_vector IS NOT NULL "
+                f"ORDER BY {order_by}"
             ).fetchall()
             return [(r[0], r[1], r[2]) for r in rows]
         rows = conn.execute(
-            "SELECT feature_vector, label FROM findings "
-            "WHERE label IS NOT NULL AND feature_vector IS NOT NULL"
+            f"SELECT feature_vector, label FROM {relation} "
+            "WHERE label IN ('tp','fp') AND feature_vector IS NOT NULL "
+            f"ORDER BY {order_by}"
         ).fetchall()
         return [(r[0], r[1], None) for r in rows]
     finally:
@@ -108,12 +176,100 @@ def _eval_metrics(model, x_val, y_val) -> dict:
     }
 
 
+def _balanced_sample_weights(y_arr: np.ndarray) -> np.ndarray:
+    classes, counts = np.unique(y_arr, return_counts=True)
+    weights = np.ones(len(y_arr), dtype=np.float32)
+    for cls, count in zip(classes, counts):
+        weights[y_arr == cls] = len(y_arr) / (len(classes) * count)
+    return weights
+
+
+def _group_normalized_sample_weights(
+    weights: np.ndarray, groups: list[str | None]
+) -> np.ndarray:
+    """Temper repeated samples from the same source group.
+
+    Bulk CVE imports can produce many near-duplicate findings from one CVE.
+    Class balancing alone still lets that one group dominate the loss, while
+    full inverse-frequency weighting overcorrects. A small exponent preserves
+    useful repeated evidence while reducing corpus-level group bias.
+    """
+    if len(weights) == 0 or len(groups) != len(weights):
+        return weights.astype(np.float32)
+
+    group_ids = [g if g is not None else f"_solo_{i}" for i, g in enumerate(groups)]
+    _, inverse, counts = np.unique(group_ids, return_inverse=True, return_counts=True)
+    normalized = weights.astype(np.float32).copy()
+    normalized /= counts[inverse].astype(np.float32) ** GROUP_WEIGHT_EXPONENT
+    total = float(normalized.sum())
+    if total > 0:
+        normalized *= len(normalized) / total
+    return normalized.astype(np.float32)
+
+
+def _training_sample_weights(y_arr: np.ndarray, groups: list[str | None]) -> np.ndarray:
+    return _group_normalized_sample_weights(_balanced_sample_weights(y_arr), groups)
+
+
+def _dataset_hash(
+    embeddings: np.ndarray, labels: list[str], groups: list[str | None]
+) -> str:
+    h = sha256()
+    for emb, label, group in zip(embeddings, labels, groups):
+        h.update(label.encode("utf-8"))
+        h.update(b"\0")
+        h.update((group or "").encode("utf-8"))
+        h.update(b"\0")
+        h.update(np.asarray(emb, dtype="<f4").tobytes())
+    return h.hexdigest()
+
+
+def _group_metrics(groups: list[str | None]) -> dict:
+    grouped = [g for g in groups if g]
+    return {
+        "group_count": len(set(grouped)),
+        "grouped_samples": len(grouped),
+        "solo_samples": len(groups) - len(grouped),
+    }
+
+
+def _record_training_run(db_path: Path, metrics: dict, model_path: Path) -> None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        _ensure_training_metadata(conn)
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO training_runs
+                (run_id, trained_at, samples, tp, fp, dataset_hash, split,
+                 model_path, metrics_json)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            """,
+            (
+                metrics["run_id"],
+                metrics["trained_at"],
+                int(metrics["samples"]),
+                int(metrics["tp"]),
+                int(metrics["fp"]),
+                metrics.get("dataset_hash"),
+                metrics.get("split"),
+                str(model_path),
+                json.dumps(metrics, sort_keys=True),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def train_from_arrays(
     embeddings: np.ndarray,
     labels: list[str],
     groups: list[str | None],
     model_path: Path,
     metrics_path: Path,
+    *,
+    dataset_hash: str | None = None,
+    skipped_invalid_vectors: int = 0,
 ) -> dict:
     """Train the GBDT directly from in-memory arrays.
 
@@ -145,6 +301,7 @@ def train_from_arrays(
 
     x_arr = embeddings.astype(np.float32)
     y_arr = np.array(y_list)
+    sample_weight = _training_sample_weights(y_arr, groups)
     tp_count = int(y_arr.sum())
     fp_count = int(len(y_arr) - tp_count)
 
@@ -173,34 +330,51 @@ def train_from_arrays(
         train_idx, val_idx = next(gss.split(x_arr, y_arr, groups=groups_arr))
         x_train, x_val = x_arr[train_idx], x_arr[val_idx]
         y_train, y_val = y_arr[train_idx], y_arr[val_idx]
+        train_weight = sample_weight[train_idx]
     elif can_split:
         from sklearn.model_selection import train_test_split
 
-        x_train, x_val, y_train, y_val = train_test_split(
-            x_arr, y_arr, test_size=0.2, random_state=42, stratify=y_arr
+        x_train, x_val, y_train, y_val, train_weight, _ = train_test_split(
+            x_arr,
+            y_arr,
+            sample_weight,
+            test_size=0.2,
+            random_state=42,
+            stratify=y_arr,
         )
 
     model = _new_classifier()
     if can_split:
-        model.fit(x_train, y_train)
+        model.fit(x_train, y_train, sample_weight=train_weight)
         val_metrics = _eval_metrics(model, x_val, y_val)
         # After reporting, retrain on the full dataset so the production
         # model uses every label available.
-        model.fit(x_arr, y_arr)
+        model.fit(x_arr, y_arr, sample_weight=sample_weight)
     else:
-        model.fit(x_arr, y_arr)
+        model.fit(x_arr, y_arr, sample_weight=sample_weight)
 
     model_path.parent.mkdir(parents=True, exist_ok=True)
     model.save_model(str(model_path))
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
+    trained_at = datetime.now(timezone.utc).isoformat()
+    dataset_hash = dataset_hash or _dataset_hash(x_arr, labels, groups)
+    run_id = sha256(f"{dataset_hash}:{trained_at}".encode("utf-8")).hexdigest()[:16]
 
     metrics = {
-        "trained_at": datetime.now(timezone.utc).isoformat(),
+        "run_id": run_id,
+        "trained_at": trained_at,
+        "dataset_hash": dataset_hash,
         "samples": len(y_list),
         "tp": tp_count,
         "fp": fp_count,
         "stage": model_stage(len(y_list)),
         "elapsed_ms": elapsed_ms,
+        "class_weighting": "balanced",
+        "group_weighting": "tempered-inverse-frequency",
+        "group_weight_exponent": GROUP_WEIGHT_EXPONENT,
+        "sample_weighting": "class-balanced+tempered-group-normalized",
+        "skipped_invalid_vectors": skipped_invalid_vectors,
+        **_group_metrics(groups),
         "split": (
             "80/20 group (CVE-aware)"
             if (can_split and use_group_split)
@@ -222,6 +396,8 @@ def train_from_arrays(
         "ok": True,
         "samples": len(y_list),
         "model_path": str(model_path),
+        "run_id": run_id,
+        "dataset_hash": dataset_hash,
         **(val_metrics or {}),
     }
 
@@ -242,17 +418,37 @@ def train(db_path: Path, model_path: Path, metrics_path: Path) -> dict:
     x_list: list[np.ndarray] = []
     labels: list[str] = []
     groups: list[str | None] = []
+    skipped_invalid_vectors = 0
     for fv_bytes, label, group_key in rows:
         fv = np.frombuffer(fv_bytes, dtype="<f4")
         if len(fv) == 768:
             x_list.append(fv)
             labels.append(label)
             groups.append(group_key)
+        else:
+            skipped_invalid_vectors += 1
 
     if not x_list:
         return {"ok": False, "reason": "no samples", "samples": 0}
 
-    return train_from_arrays(np.array(x_list), labels, groups, model_path, metrics_path)
+    embeddings = np.array(x_list)
+    result = train_from_arrays(
+        embeddings,
+        labels,
+        groups,
+        model_path,
+        metrics_path,
+        dataset_hash=_dataset_hash(embeddings, labels, groups),
+        skipped_invalid_vectors=skipped_invalid_vectors,
+    )
+    if result.get("ok"):
+        metrics = read_metrics(metrics_path)
+        if metrics:
+            try:
+                _record_training_run(db_path, metrics, model_path)
+            except Exception as e:
+                logger.warning("failed to record training run: %s", e)
+    return result
 
 
 def read_metrics(metrics_path: Path) -> dict | None:
@@ -273,7 +469,7 @@ def label_counts(db_path: Path) -> dict:
     conn = sqlite3.connect(str(db_path))
     try:
         total = conn.execute(
-            "SELECT COUNT(*) FROM findings WHERE label IS NOT NULL"
+            "SELECT COUNT(*) FROM findings WHERE label IN ('tp','fp')"
         ).fetchone()[0]
         tp = conn.execute(
             "SELECT COUNT(*) FROM findings WHERE label = 'tp'"

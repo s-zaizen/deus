@@ -29,6 +29,7 @@ from typing import Optional
 import numpy as np
 
 from . import embedder
+from .sql_safety import is_non_sql_query_accessor, is_safe_parameterized_sql_line
 
 logger = logging.getLogger("makina_ml.analyzer")
 
@@ -171,6 +172,7 @@ SINK_REGEX: dict[str, re.Pattern] = {
     ),
     "CWE-89": re.compile(
         r"\.(?:execute|executemany|query|prepare|raw)\s*\(|"
+        r"\.(?:Query|QueryRow|Exec)\s*\(|"
         r"\b(?:executeQuery|executeUpdate)\s*\(",
     ),
     "CWE-22": re.compile(
@@ -213,6 +215,12 @@ def _find_sink_match(
     for i in range(lo, hi):
         match = pat.search(lines[i])
         if match:
+            if cwe == "CWE-89" and is_non_sql_query_accessor(lines[i][match.start() :]):
+                continue
+            if cwe == "CWE-89" and is_safe_parameterized_sql_line(
+                lines[i], match.start()
+            ):
+                continue
             return i + 1, match.span()
     return None
 

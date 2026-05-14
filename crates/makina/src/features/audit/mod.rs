@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 
 use crate::api::models::{
     AuditReportSection, AuditRunRequest, AuditRunResponse, AuditStepRunRequest, AuditStepStatus,
-    AuditWorkflowResult, Finding,
+    AuditWorkflowResult, ExplorationPlan, Finding,
 };
 use crate::infra::ml::{language_hint, MlClient};
 use crate::logging::RequestId;
@@ -27,6 +27,7 @@ const SYSTEM_PROMPT: &str = concat!(
     "Use only the submitted code, scanner findings, and prior audit step outputs.\n",
     "Separate confirmed evidence from hypotheses.\n",
     "Do not claim a vulnerability is confirmed without a concrete source, path, and sink.\n",
+    "Use exploration plans as validation guidance only; they are hypotheses until backed by submitted code or runtime evidence.\n",
     "When discussing proof of concept material, keep it minimal, non-destructive, and scoped to reproduction evidence.\n",
     "When a JSON schema or structured-output tool is supplied, return only data that conforms to it."
 );
@@ -44,6 +45,7 @@ const WORKFLOW: &[WorkflowStep] = &[
         prompt: concat!(
             "Group the scanner findings into confirmed candidates, likely false positives, and needs-review items. ",
             "Use scanner metadata as model-augmented evidence, not as ground truth. ",
+            "When a finding includes exploration_plan, use its objective and required_evidence to state what must be collected next. ",
             "For each candidate, identify the CWE, relevant lines, security boundary, and the missing evidence needed before reporting."
         ),
     },
@@ -53,6 +55,7 @@ const WORKFLOW: &[WorkflowStep] = &[
         prompt: concat!(
             "Validate the high-priority candidates with a source-to-sink review. ",
             "For each candidate, identify attacker-controlled input, propagation, sanitizer or guard checks, sink, and reachable preconditions. ",
+            "If exploration_plan is present, follow its ordered steps and feedback_signals while still verifying each claim against the submitted code. ",
             "Reject or downgrade findings when the provided code does not support a concrete path."
         ),
     },
@@ -102,6 +105,7 @@ struct FindingSummary<'a> {
     confidence: f32,
     is_uncertain: bool,
     code_snippet: String,
+    exploration_plan: &'a Option<ExplorationPlan>,
 }
 
 pub async fn run(
@@ -356,6 +360,7 @@ fn summarize_finding(finding: &Finding) -> FindingSummary<'_> {
         confidence: finding.confidence,
         is_uncertain: finding.is_uncertain,
         code_snippet: truncate_text(&finding.code_snippet, 1200),
+        exploration_plan: &finding.exploration_plan,
     }
 }
 
@@ -810,6 +815,57 @@ mod tests {
     }
 
     #[test]
+    fn audit_context_includes_exploration_plan_guidance() {
+        let req = AuditRunRequest {
+            provider: crate::api::models::AuditProvider::Openai,
+            api_key: "sk-test".into(),
+            model: "model".into(),
+            max_output_tokens: 4000,
+            scan_id: Some("scan-1".into()),
+            code: "cursor.execute(query)".into(),
+            language: crate::api::models::Language::Python,
+            findings: vec![Finding {
+                id: "finding-1".into(),
+                rule_id: "taint-python-sqli".into(),
+                message: "SQL Injection".into(),
+                severity: crate::api::models::Severity::Critical,
+                line_start: 10,
+                line_end: 10,
+                code_snippet: "cursor.execute(query)".into(),
+                confidence: 0.85,
+                is_uncertain: false,
+                cwe: Some("CWE-89".into()),
+                source: "taint".into(),
+                trace_graph: None,
+                exploration_plan: Some(crate::api::models::ExplorationPlan {
+                    kind: "source_to_sink".into(),
+                    title: "Validate SQL path".into(),
+                    objective: "Confirm reachability".into(),
+                    priority: 0.82,
+                    rationale: "Taint path found".into(),
+                    steps: vec![crate::api::models::ExplorationStep {
+                        id: "source:handler".into(),
+                        kind: "source".into(),
+                        label: "handler".into(),
+                        file: Some("app.py".into()),
+                        line_start: Some(10),
+                        line_end: Some(10),
+                        detail: Some("Confirm untrusted caller".into()),
+                    }],
+                    feedback_signals: vec!["runtime coverage reaches the path".into()],
+                    required_evidence: vec!["HTTP route exposes handler".into()],
+                }),
+            }],
+        };
+
+        let context = build_audit_context(&req);
+
+        assert!(context.contains("\"exploration_plan\""));
+        assert!(context.contains("Validate SQL path"));
+        assert!(context.contains("HTTP route exposes handler"));
+    }
+
+    #[test]
     fn structured_report_json_renders_canonical_markdown_sections() {
         let req = AuditRunRequest {
             provider: crate::api::models::AuditProvider::Openai,
@@ -831,6 +887,8 @@ mod tests {
                 is_uncertain: false,
                 cwe: Some("CWE-89".into()),
                 source: "semgrep".into(),
+                trace_graph: None,
+                exploration_plan: None,
             }],
         };
         let output = r#"{
@@ -880,6 +938,8 @@ mod tests {
                 is_uncertain: false,
                 cwe: Some("CWE-89".into()),
                 source: "semgrep".into(),
+                trace_graph: None,
+                exploration_plan: None,
             }],
         };
         let markdown = "# MAKINA-001: CWE-89 SQL Injection\n\n## Summary\nConfirmed.\n\n## Vulnerability Details\nSource reaches sink.\n\n## Impact\nData exposure.\n\n## Proof of Concept\nSafe input.\n\n## Remediation\nBind parameters.\n\n## Verification Notes\nConfirm route.\n\n## Confidence\nHigh.";
@@ -917,6 +977,8 @@ mod tests {
                     is_uncertain: false,
                     cwe: Some("CWE-89".into()),
                     source: "semgrep".into(),
+                    trace_graph: None,
+                    exploration_plan: None,
                 },
                 Finding {
                     id: "finding-2".into(),
@@ -930,6 +992,8 @@ mod tests {
                     is_uncertain: false,
                     cwe: Some("CWE-78".into()),
                     source: "semgrep".into(),
+                    trace_graph: None,
+                    exploration_plan: None,
                 },
             ],
         };

@@ -1,5 +1,5 @@
-//! `POST /api/feedback` — record a TP/FP label on a single finding and
-//! fire a supplementary train every 10 individual labels.
+//! `POST /api/feedback` — low-level TP/FP label endpoint for a single
+//! finding. The main UI learning path goes through Verify Submit.
 
 use axum::{
     extract::{Extension, Json},
