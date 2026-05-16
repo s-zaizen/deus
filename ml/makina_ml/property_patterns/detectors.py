@@ -130,6 +130,34 @@ _SAFE_VALUE_RE = re.compile(
     r"whitelist|check|filter|clean|canonical)\w*\s*\(",
     re.IGNORECASE,
 )
+_COUNTED_FIELD_NAME_RE = (
+    r"(?:num_[A-Za-z_]\w*|[A-Za-z_]\w*(?:_count|Count|_len|Len|"
+    r"_length|Length)|count|len|length|size)"
+)
+_COUNTED_MEMBER_RE = re.compile(
+    rf"\b(?P<expr>[A-Za-z_]\w*"
+    rf"(?:(?:\s*->\s*|\s*\.\s*)[A-Za-z_]\w*)*"
+    rf"\s*(?:->|\.)\s*{_COUNTED_FIELD_NAME_RE})\b"
+)
+_COPY_LIKE_CALL_RE = re.compile(
+    r"\b(?:[A-Za-z_]\w*)?(?:copy|clone|dup|assign)\w*\s*\((?P<args>.*?)\)",
+    re.IGNORECASE | re.DOTALL,
+)
+_COUNTED_SIZE_CONTEXT_RE = re.compile(
+    r"(?:size|len|length|offset|alloc|malloc|calloc|realloc|kmalloc|"
+    r"kcalloc|reserve|capacity)",
+    re.IGNORECASE,
+)
+_COUNTED_BOUND_CONTEXT_RE = re.compile(
+    r"(?:sizeof|offsetof|BASE_SIZE|base_size|remaining|remain|avail|len|"
+    r"length|size|end|capacity|bound)",
+    re.IGNORECASE,
+)
+_REJECTING_GUARD_RE = re.compile(
+    r"\b(if|return|break|continue|goto|raise|throw|panic|abort)\b|"
+    r"\b(?:Err|error|EINVAL|EOVERFLOW)\b",
+    re.IGNORECASE,
+)
 
 
 def _detect_incomplete_cache_key(fn: FunctionBlock, language: str) -> list[Finding]:
@@ -491,6 +519,192 @@ def _detect_formatted_command_injection(
     return findings
 
 
+def _detect_counted_varlen_source_count(
+    fn: FunctionBlock, language: str
+) -> list[Finding]:
+    del language
+    findings: list[Finding] = []
+    copy_events: list[tuple[int, str, str]] = []
+
+    for line_no, stmt in _statements(fn.lines, fn.start_line):
+        normalized = _strip_comments(stmt)
+        copy_events = [event for event in copy_events if 0 <= line_no - event[0] <= 12]
+        copy_events.extend(
+            event
+            for event in _copy_like_pairs(normalized, line_no)
+            if _copy_source_may_be_external(event[2], fn.params)
+        )
+
+        for raw_count in _counted_member_exprs(normalized):
+            count_expr = _normalize_member_expr(raw_count)
+            if not _is_counted_varlen_size_use(normalized, count_expr):
+                continue
+
+            event = _matching_copy_source(copy_events, count_expr)
+            if event is None:
+                continue
+            if _has_counted_varlen_guard(fn.lines, fn.start_line, line_no, count_expr):
+                continue
+
+            line_end = min(fn.end_line, line_no + len(stmt.splitlines()) - 1)
+            findings.append(
+                Finding(
+                    rule_id="PROP-COUNTED-VARLEN",
+                    message=(
+                        "Counted variable-length field "
+                        f"`{count_expr}` is copied or normalized, but later "
+                        "sizing still uses the source-declared count"
+                    ),
+                    severity="high",
+                    line_start=line_no,
+                    line_end=line_end,
+                    code_snippet=stmt[:600],
+                    confidence=0.7,
+                    cwe="CWE-125",
+                )
+            )
+            return findings
+
+    return findings
+
+
+def _copy_like_pairs(stmt: str, line_no: int) -> list[tuple[int, str, str]]:
+    pairs: list[tuple[int, str, str]] = []
+    for match in _COPY_LIKE_CALL_RE.finditer(stmt):
+        args = _split_call_args(match.group("args"))
+        if len(args) < 2:
+            continue
+        dst = _clean_member_arg(args[0])
+        src = _clean_member_arg(args[1])
+        if not dst or not src or dst == src:
+            continue
+        pairs.append((line_no, dst, src))
+    return pairs
+
+
+def _copy_source_may_be_external(src: str, params: list[str]) -> bool:
+    root = src.split(".", 1)[0]
+    return root in params
+
+
+def _split_call_args(raw: str) -> list[str]:
+    args: list[str] = []
+    current: list[str] = []
+    depth = 0
+    quote: str | None = None
+    escape = False
+    for char in raw:
+        if quote:
+            current.append(char)
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in ("'", '"', "`"):
+            quote = char
+            current.append(char)
+            continue
+        if char == "(":
+            depth += 1
+        elif char == ")" and depth > 0:
+            depth -= 1
+        if char == "," and depth == 0:
+            args.append("".join(current).strip())
+            current = []
+            continue
+        current.append(char)
+    if current:
+        args.append("".join(current).strip())
+    return args
+
+
+def _clean_member_arg(raw: str) -> str:
+    arg = raw.strip()
+    arg = re.sub(r"^\([^()]+\)\s*", "", arg)
+    while arg.startswith(("&", "*")):
+        arg = arg[1:].strip()
+    while arg.startswith("(") and arg.endswith(")") and _balanced_outer_parens(arg):
+        arg = arg[1:-1].strip()
+    arg = _normalize_member_expr(arg)
+    if not re.match(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$", arg):
+        return ""
+    return arg
+
+
+def _balanced_outer_parens(value: str) -> bool:
+    depth = 0
+    for idx, char in enumerate(value):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0 and idx != len(value) - 1:
+                return False
+    return depth == 0
+
+
+def _counted_member_exprs(stmt: str) -> list[str]:
+    return [match.group("expr") for match in _COUNTED_MEMBER_RE.finditer(stmt)]
+
+
+def _normalize_member_expr(expr: str) -> str:
+    normalized = re.sub(r"\s+", "", expr)
+    return normalized.replace("->", ".")
+
+
+def _compact_member_text(text: str) -> str:
+    return _normalize_member_expr(text)
+
+
+def _is_counted_varlen_size_use(stmt: str, count_expr: str) -> bool:
+    compact = _compact_member_text(stmt)
+    if count_expr not in compact:
+        return False
+    if not _COUNTED_SIZE_CONTEXT_RE.search(stmt):
+        return False
+    return (
+        f"{count_expr}*" in compact
+        or f"*{count_expr}" in compact
+        or f"{count_expr}<<" in compact
+        or f"<<{count_expr}" in compact
+    )
+
+
+def _matching_copy_source(
+    copy_events: list[tuple[int, str, str]], count_expr: str
+) -> tuple[int, str, str] | None:
+    for event in reversed(copy_events):
+        _, _dst, src = event
+        if count_expr == src or count_expr.startswith(f"{src}."):
+            return event
+    return None
+
+
+def _has_counted_varlen_guard(
+    lines: list[str], start_line: int, line_no: int, count_expr: str
+) -> bool:
+    idx = max(0, line_no - start_line)
+    window = "\n".join(lines[max(0, idx - 18) : idx + 1])
+    compact = _compact_member_text(_strip_comments(window))
+    if count_expr not in compact:
+        return False
+    if not _COUNTED_BOUND_CONTEXT_RE.search(window):
+        return False
+    if not _REJECTING_GUARD_RE.search(window):
+        return False
+    if not any(op in compact for op in ("<", ">", "<=", ">=")):
+        return False
+    return (
+        f"{count_expr}*" in compact
+        or f"*{count_expr}" in compact
+        or f"{count_expr}<<" in compact
+        or f"<<{count_expr}" in compact
+    )
+
+
 def _statements(lines: list[str], start_line: int) -> Iterable[tuple[int, str]]:
     pending: list[str] = []
     pending_start = start_line
@@ -692,4 +906,5 @@ DETECTORS: tuple[Detector, ...] = (
     _detect_unchecked_go_verifier_result,
     _detect_unbounded_external_size,
     _detect_formatted_command_injection,
+    _detect_counted_varlen_source_count,
 )

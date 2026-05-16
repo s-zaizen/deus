@@ -279,3 +279,67 @@ function renderDebugCommand(userName) {
 }
 """
     assert "PROP-FORMATTED-COMMAND" not in _rules(code, "javascript")
+
+
+def test_counted_varlen_source_count_after_copy_is_caught():
+    code = """\
+struct sid {
+    unsigned char num_subauth;
+    unsigned int sub_auth[15];
+};
+
+static void set_record(struct record *out, const struct sid *sid) {
+    copy_sid(&out->sid, sid);
+    out->size = BASE_SIZE + sid->num_subauth * sizeof(unsigned int);
+}
+"""
+    assert "PROP-COUNTED-VARLEN" in _rules(code, "c")
+
+
+def test_counted_varlen_ksmbd_shaped_sid_size_mismatch():
+    code = """\
+static void smb_set_ace(struct smb_ace *ace, const struct smb_sid *sid, u8 type,
+                        u8 flags, __le32 access_req)
+{
+    ace->type = type;
+    ace->flags = flags;
+    ace->access_req = access_req;
+    smb_copy_sid(&ace->sid, sid);
+    ace->size = cpu_to_le16(1 + 1 + 2 + 4 + 1 + 1 + 6 + (sid->num_subauth * 4));
+}
+"""
+    assert "PROP-COUNTED-VARLEN" in _rules(code, "c")
+
+
+def test_counted_varlen_destination_count_after_copy_is_quiet():
+    code = """\
+struct sid {
+    unsigned char num_subauth;
+    unsigned int sub_auth[15];
+};
+
+static void set_record(struct record *out, const struct sid *sid) {
+    copy_sid(&out->sid, sid);
+    out->size = BASE_SIZE + out->sid.num_subauth * sizeof(unsigned int);
+}
+"""
+    assert "PROP-COUNTED-VARLEN" not in _rules(code, "c")
+
+
+def test_counted_varlen_serialized_length_guard_is_quiet():
+    code = """\
+struct sid {
+    unsigned char num_subauth;
+    unsigned int sub_auth[15];
+};
+
+static int set_record(struct record *out, const struct sid *sid, size_t sid_len) {
+    if (sid_len < SID_BASE_SIZE + sid->num_subauth * sizeof(unsigned int)) {
+        return -1;
+    }
+    copy_sid(&out->sid, sid);
+    out->size = BASE_SIZE + sid->num_subauth * sizeof(unsigned int);
+    return 0;
+}
+"""
+    assert "PROP-COUNTED-VARLEN" not in _rules(code, "c")

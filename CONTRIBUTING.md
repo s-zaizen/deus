@@ -80,7 +80,10 @@ property-pattern checks all contribute evidence before Rust merges and
 deduplicates findings. New property-pattern detectors should avoid
 project-specific API names as their only signal and should include focused
 tests that cover a real trigger, a generalized trigger, and a quiet
-sanitized/non-sink case.
+sanitized/non-sink case. Counted-structure detectors must prove they are
+matching a structural contract, such as source count plus element-size
+arithmetic after copy/normalization, rather than one vulnerable project's
+function names.
 
 Folder scans must use the project scan path rather than looping over
 independent `/api/scan` calls. `POST /api/scan/project` groups files by

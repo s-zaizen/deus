@@ -86,6 +86,12 @@ def _extract_brace_functions(lines: list[str], language: str) -> list[FunctionBl
     while idx < len(lines):
         line = lines[idx]
         matched = _match_function_signature(line, regexes)
+        signature_end = idx
+        if not matched:
+            signature, signature_end = _collect_multiline_signature(lines, idx)
+            matched = (
+                _match_function_signature(signature, regexes) if signature else None
+            )
         if not matched:
             idx += 1
             continue
@@ -93,8 +99,9 @@ def _extract_brace_functions(lines: list[str], language: str) -> list[FunctionBl
         name = matched.group(1)
         params = _parse_params(matched.group(2), language)
         start = idx
-        brace_count = line.count("{") - line.count("}")
-        probe = idx + 1
+        signature_lines = lines[idx : signature_end + 1]
+        brace_count = sum(part.count("{") - part.count("}") for part in signature_lines)
+        probe = signature_end + 1
         while probe < len(lines):
             brace_count += lines[probe].count("{") - lines[probe].count("}")
             if brace_count <= 0 and "{" in "\n".join(lines[start : probe + 1]):
@@ -104,6 +111,24 @@ def _extract_brace_functions(lines: list[str], language: str) -> list[FunctionBl
         blocks.append(FunctionBlock(name, params, start + 1, end, lines[start:end]))
         idx = max(end, idx + 1)
     return blocks
+
+
+def _collect_multiline_signature(lines: list[str], idx: int) -> tuple[str, int]:
+    parts: list[str] = []
+    for probe in range(idx, min(len(lines), idx + 8)):
+        stripped = lines[probe].strip()
+        if not stripped:
+            if parts:
+                break
+            continue
+        if stripped.startswith(("#", "//", "/*", "*")):
+            return "", idx
+        parts.append(stripped)
+        if "{" in stripped:
+            return " ".join(parts), probe
+        if stripped.endswith(";"):
+            return "", idx
+    return "", idx
 
 
 def _match_function_signature(line: str, regexes: list[re.Pattern]) -> re.Match | None:

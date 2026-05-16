@@ -161,8 +161,9 @@ For each scan request, four detectors run in parallel and are merged:
 4. **property patterns** — structural correctness checks for incomplete
    cache/dedup keys, mismatched parallel collections, unchecked verifier
    booleans, repeated mutable reads, unbounded attacker-controlled sizes,
-   and formatted command/interpreter strings built from externally
-   derived parameters
+   formatted command/interpreter strings built from externally derived
+   parameters, and counted variable-length structures whose copied or
+   normalized payload is later sized from the source-declared count
 
 Merge deduplicates near-overlapping findings by CWE/rule. When two
 detectors report the same issue with the same severity, the richer
@@ -176,9 +177,13 @@ C API; it combines function-parameter provenance, string formatting or
 concatenation, sanitizer-looking calls, and generic command/interpreter
 sink names to surface CWE-78 style command construction across C, C++,
 JavaScript/TypeScript, Python, and similar syntax families. These checks
-are heuristic evidence generators; the Audit workflow should validate
-caller reachability and trust-boundary evidence before treating them as
-externally exploitable vulnerabilities.
+are heuristic evidence generators. `PROP-COUNTED-VARLEN` similarly looks
+for source-declared count/length fields reused after copy/normalization
+without a visible `count * element_size` serialized-length guard, which
+surfaces out-of-bounds read/write candidates in counted binary formats.
+The Audit workflow should validate caller reachability and trust-boundary
+evidence before treating these findings as externally exploitable
+vulnerabilities.
 
 After merge, each finding is embedded with call-graph-augmented context
 (enclosing function + 1-hop callees). The Rust core calls
